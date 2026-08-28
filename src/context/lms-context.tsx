@@ -28,7 +28,7 @@ import {
   initialReflections,
   initialRosters,
   initialStudyGroups,
-} from '@/lib/mock-data';
+} from '@/lib/demo-data';
 import {
   claimRoster as claimRosterLive,
   createCourse as createCourseLive,

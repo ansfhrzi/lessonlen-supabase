@@ -119,7 +119,7 @@ lessonlen-supabase/
 │   │   └── lms-context.tsx                # Context state, hydration & live mutations
 │   └── lib/
 │       ├── types.ts                       # TypeScript Data Models
-│       ├── mock-data.ts                   # Offline demo fallback only
+│       ├── demo-data.ts                   # Offline demo fallback only
 │       ├── lms-api.ts                     # PostgREST queries + RPC adapter
 │       └── supabase/client.ts             # Supabase Client SDK Wrapper
 ├── supabase/

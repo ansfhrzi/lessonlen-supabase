@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Profile, UserRole } from '@/lib/types';
-import { studentProfiles, teacherProfile } from '@/lib/mock-data';
+import { studentProfiles, teacherProfile } from '@/lib/demo-data';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
 interface AuthContextType {
