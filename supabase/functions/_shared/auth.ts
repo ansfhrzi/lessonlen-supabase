@@ -9,8 +9,16 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+// UI: prioritas dukung key baru Supabase, tapi fallback ke legacy key jadul.
+// - Baru: SB_PUBLISHABLE_KEY (sb_publishable_...)  <-> ganti anon
+// - Baru: SUPABASE_SECRET_KEY (sb_secret_...)        <-> ganti service_role
+// - Lama: SUPABASE_ANON_KEY                          <-> anon (eyJ...)
+// - Lama: SUPABASE_SERVICE_ROLE_KEY                  <-> service_role (eyJ...)
+const SUPABASE_ANON_KEY =
+  Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY =
+  Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 export type TeacherProfile = {
   id: string;

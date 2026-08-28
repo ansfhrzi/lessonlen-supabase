@@ -70,23 +70,47 @@ Cara cari Project Ref:
 Ganti `YOUR_GEMINI_KEY` dengan API key dari **Google AI Studio**
 (https://aistudio.google.com/apikey).
 
-### Cara 1 — Via CLI (disarankan)
-```bash
+### Pilih key Supabase mana yang dipakai?
+
+Saat ini ada dua bentuk key:
+
+| Key | Isi ke env | Untuk |
+|---|---|---|
+| **Secret (baru)** <br>`sb_secret_...` | `SUPABASE_SECRET_KEY` | Server/Edge — pengganti service_role (disarankan) |
+| **Legacy service_role** <br>`eyJ...` | `SUPABASE_SERVICE_ROLE_KEY` | Server/Edge — masih berlaku |
+| **Publishable (baru)** <br>`sb_publishable_...` | tidak dipakai di Edge ini | Frontend/browser (pengganti anon) |
+| **Legacy anon** <br>`eyJ...` | tidak dipakai di Edge ini | Frontend/browser |
+
+> Kode Edge Function kami sudah mendukung **keduanya**. Kalau kamu pakai key baru,
+> isi `SUPABASE_SECRET_KEY`. Kalau masih pakai legacy, isi `SUPABASE_SERVICE_ROLE_KEY`.
+
+### Cara 1 — Pakai key baru (disarankan)
+```powershell
 supabase secrets set GEMINI_API_KEY=YOUR_GEMINI_KEY
 supabase secrets set AI_DAILY_LIMIT=50
-supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<KEY_SERVICE_ROLE_DARI_DASHBOARD>
+supabase secrets set SUPABASE_SECRET_KEY=sb_secret_...
 ```
 
-### Cara 2 — Via Dashboard
-1. Dashboard → **Settings → API Keys** → salin **service_role** key.
-2. Dashboard → **Settings → Edge Functions → Secrets** (atau **Secrets**).
-3. Tambahkan:
+### Cara 2 — Pakai legacy key (masih bisa)
+```powershell
+supabase secrets set GEMINI_API_KEY=YOUR_GEMINI_KEY
+supabase secrets set AI_DAILY_LIMIT=50
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<service_role JWT dari Legacy API Keys>
+```
+
+### Cara 3 — Via Dashboard
+1. Dashboard → **Settings → API Keys**.
+2. Salin salah satu:
+   - **Secret key** (`sb_secret_...`) jika memakai key baru, atau
+   - **service_role** di tab **Legacy API Keys** jika memakai yang lama.
+3. Dashboard → **Settings → Edge Functions → Secrets** (atau **Secrets**).
+4. Tambahkan:
    - `GEMINI_API_KEY` = kunci Gemini
    - `AI_DAILY_LIMIT` = `50`
-   - `SUPABASE_SERVICE_ROLE_KEY` = service role key
+   - `SUPABASE_SECRET_KEY` = `sb_secret_...` (atau `SUPABASE_SERVICE_ROLE_KEY` = service_role)
 
-> ⚠️ **JANGAN memasukkan service_role key ke frontend.** Hanya Edge Function
-> yang berhak memakainya, dan itu dilakukan lewat secret di server.
+> ⚠️ **JANGAN memasukkan `sb_publishable` / `anon` ke `SUPABASE_SECRET_KEY` atau
+> `SUPABASE_SERVICE_ROLE_KEY`.** Yang terakhir harus secret/server-only.
 
 ---
 
