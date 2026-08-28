@@ -575,8 +575,10 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     if (live) {
       const clientSubmissionId = makeId('submission');
       return submitQuizLive(activityId, answers, timeTakenSeconds, clientSubmissionId).then((result) => {
-        void studentId;
         void studentName;
+        // submit_quiz scores and stores the attempt; completion is a separate
+        // table in the migration, so persist it after the RPC succeeds.
+        markActivityCompleted(studentId, activityId);
         void refreshLiveData();
         return {
           submissionId: result.submissionId,
@@ -675,7 +677,12 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
 
     if (live) {
       void saveAssignment({ activityId: data.activityId, studentId: activity.assignment_mode === 'individual' ? data.studentId : undefined, groupId, link: data.link, text: data.text })
-        .then(() => refreshLiveData())
+        .then(() => {
+          // The current migration has no assignment-completion trigger. The
+          // submitting user can therefore mark their own activity complete.
+          markActivityCompleted(data.studentId, data.activityId);
+          return refreshLiveData();
+        })
         .catch((error: Error) => console.error('Gagal menyimpan tugas:', error.message));
     } else if (groupId) {
       const group = studyGroups.find((item) => item.id === groupId);
@@ -715,7 +722,10 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     setReflections((previous) => [reflection, ...previous.filter((item) => !(item.activity_id === activityId && item.student_id === studentId))]);
     if (live) {
       void saveReflection({ activityId, studentId, text, mood })
-        .then(() => refreshLiveData())
+        .then(() => {
+          markActivityCompleted(studentId, activityId);
+          return refreshLiveData();
+        })
         .catch((error: Error) => console.error('Gagal menyimpan refleksi:', error.message));
     } else {
       markActivityCompleted(studentId, activityId);
