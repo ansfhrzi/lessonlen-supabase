@@ -11,14 +11,21 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 
 // UI: prioritas dukung key baru Supabase, tapi fallback ke legacy key jadul.
-// - Baru: SB_PUBLISHABLE_KEY (sb_publishable_...)  <-> ganti anon
-// - Baru: SUPABASE_SECRET_KEY (sb_secret_...)        <-> ganti service_role
-// - Lama: SUPABASE_ANON_KEY                          <-> anon (eyJ...)
-// - Lama: SUPABASE_SERVICE_ROLE_KEY                  <-> service_role (eyJ...)
+// Catatan: Supabase CLI tidak mengizinkan nama secret diawali "SUPABASE_",
+// jadi kita pakai nama NON-SUPABASE (SECRET_KEY / ANON_KEY) sebagai opsi utama:
+//   - SECRET_KEY             -> secret key / service_role (server-only)
+//   - ANON_KEY               -> anon / publishable (public key)
+//   - SUPABASE_SECRET_KEY    -> tetap didukung (misal di dashboard manual)
+//   - SUPABASE_SERVICE_ROLE_KEY -> tetap didukung (legacy)
+//   - SUPABASE_PUBLISHABLE_KEY / SUPABASE_ANON_KEY -> tetap didukung
 const SUPABASE_ANON_KEY =
-  Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY")!;
+  Deno.env.get("ANON_KEY") ??
+  Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ??
+  Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY =
-  Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  Deno.env.get("SECRET_KEY") ??
+  Deno.env.get("SUPABASE_SECRET_KEY") ??
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 export type TeacherProfile = {
   id: string;

@@ -12,9 +12,12 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 
-// Dukung key baru Supabase (SUPABASE_SECRET_KEY) dan legacy (SUPABASE_SERVICE_ROLE_KEY).
+// Dukung key baru Supabase (SUPABASE_SECRET_KEY), legacy (SUPABASE_SERVICE_ROLE_KEY),
+// DAN nama non-SUPABASE (SECRET_KEY) yang dipakai karena CLI tidak mengizinkan prefix SUPABASE_.
 const SUPABASE_SERVICE_ROLE_KEY =
-  Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  Deno.env.get("SECRET_KEY") ??
+  Deno.env.get("SUPABASE_SECRET_KEY") ??
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
 

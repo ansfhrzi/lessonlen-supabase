@@ -84,18 +84,37 @@ Saat ini ada dua bentuk key:
 > Kode Edge Function kami sudah mendukung **keduanya**. Kalau kamu pakai key baru,
 > isi `SUPABASE_SECRET_KEY`. Kalau masih pakai legacy, isi `SUPABASE_SERVICE_ROLE_KEY`.
 
-### Cara 1 — Pakai key baru (disarankan)
+> ⚠️ **Supabase CLI tidak mengizinkan nama secret yang diawali `SUPABASE_`**
+> (misalnya `SUPABASE_SECRET_KEY` dilewati). Karena itu gunakan nama **tanpa prefix**:
+> `SECRET_KEY` dan `ANON_KEY`.
+
+### Cara 1 — Pakai CLI (disarankan, nama tanpa prefix `SUPABASE_`)
 ```powershell
 supabase secrets set GEMINI_API_KEY=YOUR_GEMINI_KEY
 supabase secrets set AI_DAILY_LIMIT=50
-supabase secrets set SUPABASE_SECRET_KEY=sb_secret_...
+supabase secrets set SECRET_KEY=sb_secret_...
+supabase secrets set ANON_KEY=sb_publishable_...
 ```
 
-### Cara 2 — Pakai legacy key (masih bisa)
+### Lambang / Kode yang dibaca Edge Function
+
+Kode kami membaca (urutan prioritas):
+
+| Variabel | Nilai yang dipakai |
+|---|---|
+| `GEMINI_API_KEY` | API key Gemini |
+| `AI_DAILY_LIMIT` | batas pemakaian AI harian |
+| `SECRET_KEY` | secret / service_role (disarankan, karena tanpa prefix `SUPABASE_`) |
+| `ANON_KEY` | anon / publishable untuk verifikasi user |
+| `SUPABASE_SECRET_KEY` | tetap didukung (jika diisi via dashboard) |
+| `SUPABASE_SERVICE_ROLE_KEY` | tetap didukung (legacy) |
+| `SUPABASE_PUBLISHABLE_KEY` / `SUPABASE_ANON_KEY` | tetap didukung (legacy) |
+
+### Cara 2 — Pakai legacy key (masih bisa, tapi pakai nama `SECRET_KEY` agar CLI tidak menolak)
 ```powershell
 supabase secrets set GEMINI_API_KEY=YOUR_GEMINI_KEY
 supabase secrets set AI_DAILY_LIMIT=50
-supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<service_role JWT dari Legacy API Keys>
+supabase secrets set SECRET_KEY=<service_role JWT dari Legacy API Keys>
 ```
 
 ### Cara 3 — Via Dashboard
@@ -107,10 +126,10 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<service_role JWT dari Legacy API
 4. Tambahkan:
    - `GEMINI_API_KEY` = kunci Gemini
    - `AI_DAILY_LIMIT` = `50`
-   - `SUPABASE_SECRET_KEY` = `sb_secret_...` (atau `SUPABASE_SERVICE_ROLE_KEY` = service_role)
+   - `SECRET_KEY` = `sb_secret_...` (atau service_role)
 
-> ⚠️ **JANGAN memasukkan `sb_publishable` / `anon` ke `SUPABASE_SECRET_KEY` atau
-> `SUPABASE_SERVICE_ROLE_KEY`.** Yang terakhir harus secret/server-only.
+> ⚠️ **JANGAN memasukkan `sb_publishable` / `anon` ke `SECRET_KEY`.**
+> `SECRET_KEY` harus diisi secret/server-only.
 
 ---
 
