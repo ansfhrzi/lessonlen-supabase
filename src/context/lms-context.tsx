@@ -1,53 +1,78 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { useAuth } from '@/context/auth-context';
 import {
-  Course,
-  CourseEnrollment,
-  ClassRoster,
-  CourseModule,
   Activity,
   ActivityType,
+  AssignmentSubmission,
+  ClassRoster,
+  Completion,
+  Course,
+  CourseEnrollment,
+  CourseModule,
   QuizQuestion,
   QuizSubmission,
-  StudyGroup,
-  AssignmentSubmission,
   Reflection,
-  Completion,
+  StudyGroup,
 } from '@/lib/types';
 import {
+  initialActivities,
+  initialAssignmentSubmissions,
+  initialCompletions,
   initialCourses,
   initialEnrollments,
-  initialRosters,
   initialModules,
-  initialActivities,
   initialQuizQuestions,
   initialQuizSubmissions,
-  initialStudyGroups,
-  initialAssignmentSubmissions,
   initialReflections,
-  initialCompletions,
+  initialRosters,
+  initialStudyGroups,
 } from '@/lib/mock-data';
+import {
+  claimRoster as claimRosterLive,
+  createCourse as createCourseLive,
+  getQuizPayload as getQuizPayloadLive,
+  insertActivity,
+  insertModule,
+  insertQuizQuestion,
+  insertRosters,
+  joinCourse,
+  loadLmsSnapshot,
+  markCompleted,
+  saveAssignment,
+  saveReflection,
+  submitQuiz as submitQuizLive,
+  gradeAssignment as gradeAssignmentLive,
+  updateActivity as updateActivityLive,
+  type LmsSnapshot,
+} from '@/lib/lms-api';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
+
+interface SubmitQuizResponse {
+  submissionId: string;
+  score: number;
+  maxPoints: number;
+  results: any[];
+}
 
 interface LMSContextType {
-  // Courses
   courses: Course[];
   createCourse: (data: { title: string; subject: string; grade_level: string; description?: string }) => Course;
   getCourse: (id: string) => Course | undefined;
   getCourseByCode: (code: string) => Course | undefined;
 
-  // Rosters (Preset Names)
   rosters: ClassRoster[];
   getRostersForCourse: (courseId: string) => ClassRoster[];
   addRostersBulk: (courseId: string, text: string) => number;
-  claimRoster: (courseId: string, rosterId: string, studentId: string, studentName: string) => boolean;
+  claimRoster: (courseId: string, rosterId: string, studentId: string, studentName: string) => boolean | Promise<boolean>;
 
-  // Enrollments
   enrollments: CourseEnrollment[];
   getStudentEnrollments: (studentId: string) => CourseEnrollment[];
-  joinCourseByCode: (code: string, studentId: string) => { success: boolean; course?: Course; error?: string };
+  joinCourseByCode: (code: string, studentId: string) =>
+    | { success: boolean; course?: Course; error?: string }
+    | Promise<{ success: boolean; course?: Course; error?: string }>;
 
-  // Modules & Activities
   modules: CourseModule[];
   activities: Activity[];
   getModulesForCourse: (courseId: string) => CourseModule[];
@@ -66,10 +91,9 @@ interface LMSContextType {
   }) => Activity;
   updateActivity: (id: string, updates: Partial<Activity>) => void;
 
-  // Quizzes
   quizQuestions: QuizQuestion[];
   quizSubmissions: QuizSubmission[];
-  getQuizPayload: (activityId: string, isTeacher: boolean) => QuizQuestion[];
+  getQuizPayload: (activityId: string, isTeacher: boolean) => QuizQuestion[] | Promise<QuizQuestion[]>;
   addQuizQuestion: (question: Omit<QuizQuestion, 'id'>) => QuizQuestion;
   submitQuiz: (
     activityId: string,
@@ -77,9 +101,8 @@ interface LMSContextType {
     studentName: string,
     answers: Record<string, string | string[]>,
     timeTakenSeconds: number
-  ) => { submissionId: string; score: number; maxPoints: number; results: any[] };
+  ) => SubmitQuizResponse | Promise<SubmitQuizResponse>;
 
-  // Groups & Assignments
   studyGroups: StudyGroup[];
   assignmentSubmissions: AssignmentSubmission[];
   getGroupsForActivity: (activityId: string) => StudyGroup[];
@@ -93,7 +116,6 @@ interface LMSContextType {
   }) => { success: boolean; error?: string };
   gradeAssignment: (submissionId: string, grade: number, feedback: string) => void;
 
-  // Reflections
   reflections: Reflection[];
   getReflectionsForActivity: (activityId: string) => Reflection[];
   submitReflection: (
@@ -104,14 +126,12 @@ interface LMSContextType {
     mood: 'paham' | 'tertantang' | 'bantuan' | 'bingung'
   ) => void;
 
-  // Completions & Progress
   completions: Completion[];
   isActivityCompleted: (studentId: string, activityId: string) => boolean;
   markActivityCompleted: (studentId: string, activityId: string) => void;
   isModuleUnlocked: (studentId: string, moduleId: string) => boolean;
   getCourseProgress: (studentId: string, courseId: string) => { total: number; completed: number; percent: number };
 
-  // AI Co-Pilot Generators
   generateMaterialAI: (topic: string, grade: string, promptNotes?: string) => Promise<{
     title: string;
     markdown: string;
@@ -135,236 +155,262 @@ interface LMSContextType {
     strengths: string[];
     improvements: string[];
   }>;
-
-  // Gradebook export
   exportGradebookCSV: (courseId: string) => string;
 }
 
 const LMSContext = createContext<LMSContextType | undefined>(undefined);
 
+function makeId(prefix: string): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readDemoState<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  const saved = localStorage.getItem(key);
+  if (!saved) return fallback;
+  try {
+    return JSON.parse(saved) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export function LMSProvider({ children }: { children: React.ReactNode }) {
-  // Initialize state with localStorage or mock data
-  const [courses, setCourses] = useState<Course[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_courses');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialCourses;
-  });
+  const { user } = useAuth();
+  const live = isSupabaseConfigured();
+  const pendingActivities = useRef(new Map<string, Promise<void>>());
 
-  const [enrollments, setEnrollments] = useState<CourseEnrollment[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_enrollments');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialEnrollments;
-  });
+  // Demo data is deliberately retained as an offline preview. As soon as a
+  // Supabase URL/key is configured, state starts empty and is hydrated only by
+  // loadLmsSnapshot(), so live data can never be silently mixed with fixtures.
+  const [courses, setCourses] = useState<Course[]>(() => (live ? [] : readDemoState('lessonlen_courses', initialCourses)));
+  const [enrollments, setEnrollments] = useState<CourseEnrollment[]>(() =>
+    live ? [] : readDemoState('lessonlen_enrollments', initialEnrollments)
+  );
+  const [rosters, setRosters] = useState<ClassRoster[]>(() => (live ? [] : readDemoState('lessonlen_rosters', initialRosters)));
+  const [modules, setModules] = useState<CourseModule[]>(() => (live ? [] : readDemoState('lessonlen_modules', initialModules)));
+  const [activities, setActivities] = useState<Activity[]>(() =>
+    live ? [] : readDemoState('lessonlen_activities', initialActivities)
+  );
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>(() =>
+    live ? [] : readDemoState('lessonlen_quiz_questions', initialQuizQuestions)
+  );
+  const [quizSubmissions, setQuizSubmissions] = useState<QuizSubmission[]>(() =>
+    live ? [] : readDemoState('lessonlen_quiz_submissions', initialQuizSubmissions)
+  );
+  const [studyGroups, setStudyGroups] = useState<StudyGroup[]>(() =>
+    live ? [] : readDemoState('lessonlen_study_groups', initialStudyGroups)
+  );
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState<AssignmentSubmission[]>(() =>
+    live ? [] : readDemoState('lessonlen_assignment_submissions', initialAssignmentSubmissions)
+  );
+  const [reflections, setReflections] = useState<Reflection[]>(() =>
+    live ? [] : readDemoState('lessonlen_reflections', initialReflections)
+  );
+  const [completions, setCompletions] = useState<Completion[]>(() =>
+    live ? [] : readDemoState('lessonlen_completions', initialCompletions)
+  );
 
-  const [rosters, setRosters] = useState<ClassRoster[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_rosters');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialRosters;
-  });
+  const applySnapshot = (snapshot: LmsSnapshot) => {
+    setCourses(snapshot.courses);
+    setEnrollments(snapshot.enrollments);
+    setRosters(snapshot.rosters);
+    setModules(snapshot.modules);
+    setActivities(snapshot.activities);
+    setQuizQuestions(snapshot.quizQuestions);
+    setQuizSubmissions(snapshot.quizSubmissions);
+    setStudyGroups(snapshot.studyGroups);
+    setAssignmentSubmissions(snapshot.assignmentSubmissions);
+    setReflections(snapshot.reflections);
+    setCompletions(snapshot.completions);
+  };
 
-  const [modules, setModules] = useState<CourseModule[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_modules');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialModules;
-  });
-
-  const [activities, setActivities] = useState<Activity[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_activities');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialActivities;
-  });
-
-  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_quiz_questions');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialQuizQuestions;
-  });
-
-  const [quizSubmissions, setQuizSubmissions] = useState<QuizSubmission[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_quiz_submissions');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialQuizSubmissions;
-  });
-
-  const [studyGroups, setStudyGroups] = useState<StudyGroup[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_study_groups');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialStudyGroups;
-  });
-
-  const [assignmentSubmissions, setAssignmentSubmissions] = useState<AssignmentSubmission[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_assignment_submissions');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialAssignmentSubmissions;
-  });
-
-  const [reflections, setReflections] = useState<Reflection[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_reflections');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialReflections;
-  });
-
-  const [completions, setCompletions] = useState<Completion[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lessonlen_completions');
-      if (saved) return JSON.parse(saved);
-    }
-    return initialCompletions;
-  });
-
-  // Sync to localStorage
-  useEffect(() => {
-    localStorage.setItem('lessonlen_courses', JSON.stringify(courses));
-  }, [courses]);
+  const refreshLiveData = async (): Promise<LmsSnapshot | null> => {
+    if (!live || !user?.id) return null;
+    const snapshot = await loadLmsSnapshot(user.role);
+    applySnapshot(snapshot);
+    return snapshot;
+  };
 
   useEffect(() => {
-    localStorage.setItem('lessonlen_enrollments', JSON.stringify(enrollments));
-  }, [enrollments]);
+    if (!live) return;
+    if (!user?.id) {
+      applySnapshot({
+        courses: [],
+        enrollments: [],
+        rosters: [],
+        modules: [],
+        activities: [],
+        quizQuestions: [],
+        quizSubmissions: [],
+        studyGroups: [],
+        assignmentSubmissions: [],
+        reflections: [],
+        completions: [],
+      });
+      return;
+    }
 
+    let cancelled = false;
+    loadLmsSnapshot(user.role)
+      .then((snapshot) => {
+        if (!cancelled) applySnapshot(snapshot);
+      })
+      .catch((error: Error) => {
+        console.error('Gagal memuat data Supabase:', error.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [live, user?.id, user?.role]);
+
+  // In demo mode localStorage remains a useful offline preview. It is never
+  // written while live mode is active.
   useEffect(() => {
-    localStorage.setItem('lessonlen_rosters', JSON.stringify(rosters));
-  }, [rosters]);
-
+    if (!live) localStorage.setItem('lessonlen_courses', JSON.stringify(courses));
+  }, [courses, live]);
   useEffect(() => {
-    localStorage.setItem('lessonlen_modules', JSON.stringify(modules));
-  }, [modules]);
-
+    if (!live) localStorage.setItem('lessonlen_enrollments', JSON.stringify(enrollments));
+  }, [enrollments, live]);
   useEffect(() => {
-    localStorage.setItem('lessonlen_activities', JSON.stringify(activities));
-  }, [activities]);
-
+    if (!live) localStorage.setItem('lessonlen_rosters', JSON.stringify(rosters));
+  }, [rosters, live]);
   useEffect(() => {
-    localStorage.setItem('lessonlen_quiz_questions', JSON.stringify(quizQuestions));
-  }, [quizQuestions]);
-
+    if (!live) localStorage.setItem('lessonlen_modules', JSON.stringify(modules));
+  }, [modules, live]);
   useEffect(() => {
-    localStorage.setItem('lessonlen_quiz_submissions', JSON.stringify(quizSubmissions));
-  }, [quizSubmissions]);
-
+    if (!live) localStorage.setItem('lessonlen_activities', JSON.stringify(activities));
+  }, [activities, live]);
   useEffect(() => {
-    localStorage.setItem('lessonlen_assignment_submissions', JSON.stringify(assignmentSubmissions));
-  }, [assignmentSubmissions]);
-
+    if (!live) localStorage.setItem('lessonlen_quiz_questions', JSON.stringify(quizQuestions));
+  }, [quizQuestions, live]);
   useEffect(() => {
-    localStorage.setItem('lessonlen_reflections', JSON.stringify(reflections));
-  }, [reflections]);
-
+    if (!live) localStorage.setItem('lessonlen_quiz_submissions', JSON.stringify(quizSubmissions));
+  }, [quizSubmissions, live]);
   useEffect(() => {
-    localStorage.setItem('lessonlen_completions', JSON.stringify(completions));
-  }, [completions]);
+    if (!live) localStorage.setItem('lessonlen_study_groups', JSON.stringify(studyGroups));
+  }, [studyGroups, live]);
+  useEffect(() => {
+    if (!live) localStorage.setItem('lessonlen_assignment_submissions', JSON.stringify(assignmentSubmissions));
+  }, [assignmentSubmissions, live]);
+  useEffect(() => {
+    if (!live) localStorage.setItem('lessonlen_reflections', JSON.stringify(reflections));
+  }, [reflections, live]);
+  useEffect(() => {
+    if (!live) localStorage.setItem('lessonlen_completions', JSON.stringify(completions));
+  }, [completions, live]);
 
-  // COURSES
   const createCourse = (data: { title: string; subject: string; grade_level: string; description?: string }) => {
     const codeChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let randomCode = '';
-    for (let i = 0; i < 6; i++) {
-      randomCode += codeChars.charAt(Math.floor(Math.random() * codeChars.length));
-    }
+    for (let i = 0; i < 6; i += 1) randomCode += codeChars.charAt(Math.floor(Math.random() * codeChars.length));
 
     const newCourse: Course = {
-      id: `course-${Date.now()}`,
-      teacher_id: 'teacher-01',
-      teacher_name: 'Ahmad Fauzi, S.Pd., M.Kom.',
+      id: makeId('course'),
+      teacher_id: user?.id || 'teacher-01',
+      teacher_name: user?.full_name,
+      school_id: user?.school_id,
       title: data.title,
       subject: data.subject,
       grade_level: data.grade_level,
       class_code: randomCode,
       description: data.description,
       year_term: '2026/2027 Ganjil',
+      is_archived: false,
       created_at: new Date().toISOString(),
     };
+    setCourses((previous) => [newCourse, ...previous]);
 
-    setCourses((prev) => [newCourse, ...prev]);
+    if (live && user?.id) {
+      void createCourseLive({
+        id: newCourse.id,
+        title: data.title,
+        subject: data.subject,
+        grade_level: data.grade_level,
+        description: data.description,
+        teacherId: user.id,
+        schoolId: user.school_id,
+        classCode: randomCode,
+      })
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal membuat kelas:', error.message));
+    }
     return newCourse;
   };
 
-  const getCourse = (id: string) => courses.find((c) => c.id === id);
-  const getCourseByCode = (code: string) => courses.find((c) => c.class_code.toUpperCase() === code.trim().toUpperCase());
+  const getCourse = (id: string) => courses.find((course) => course.id === id);
+  const getCourseByCode = (code: string) =>
+    courses.find((course) => course.class_code.toUpperCase() === code.trim().toUpperCase());
 
-  // ROSTERS (Preset Names)
-  const getRostersForCourse = (courseId: string) => rosters.filter((r) => r.course_id === courseId);
+  const getRostersForCourse = (courseId: string) => rosters.filter((roster) => roster.course_id === courseId);
+
+  const parseRosterInput = (text: string, courseId: string) => {
+    const existingCount = rosters.filter((roster) => roster.course_id === courseId).length;
+    return text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line, index) => {
+        let nis: string | undefined;
+        let fullName = line;
+        if (line.includes(',')) {
+          const parts = line.split(',');
+          nis = parts[0].trim();
+          fullName = parts.slice(1).join(',').trim();
+        } else if (line.includes('-')) {
+          const parts = line.split('-');
+          if (/^\d+$/.test(parts[0].trim())) {
+            nis = parts[0].trim();
+            fullName = parts.slice(1).join('-').trim();
+          }
+        }
+        return {
+          id: makeId('roster'),
+          course_id: courseId,
+          nis,
+          full_name: fullName,
+          sort_order: existingCount + index + 1,
+          is_claimed: false,
+        } as ClassRoster;
+      });
+  };
 
   const addRostersBulk = (courseId: string, text: string) => {
-    const lines = text
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-
-    const newRosters: ClassRoster[] = lines.map((line, idx) => {
-      let nis: string | undefined;
-      let fullName = line;
-
-      // Check format like "202401, Nama Siswa" or "202401 - Nama Siswa"
-      if (line.includes(',')) {
-        const parts = line.split(',');
-        nis = parts[0].trim();
-        fullName = parts.slice(1).join(',').trim();
-      } else if (line.includes('-')) {
-        const parts = line.split('-');
-        if (/^\d+$/.test(parts[0].trim())) {
-          nis = parts[0].trim();
-          fullName = parts.slice(1).join('-').trim();
-        }
-      }
-
-      return {
-        id: `ros-${Date.now()}-${idx}`,
-        course_id: courseId,
-        nis,
-        full_name: fullName,
-        sort_order: rosters.filter((r) => r.course_id === courseId).length + idx + 1,
-        is_claimed: false,
-      };
-    });
-
-    setRosters((prev) => [...prev, ...newRosters]);
+    const newRosters = parseRosterInput(text, courseId);
+    setRosters((previous) => [...previous, ...newRosters]);
+    if (live && newRosters.length > 0) {
+      void insertRosters(courseId, newRosters.map(({ nis, full_name, sort_order }) => ({ nis, full_name, sort_order })))
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal menyimpan roster:', error.message));
+    }
     return newRosters.length;
   };
 
   const claimRoster = (courseId: string, rosterId: string, studentId: string, studentName: string) => {
-    setRosters((prev) =>
-      prev.map((r) => {
-        if (r.id === rosterId) {
-          return {
-            ...r,
-            is_claimed: true,
-            claimed_by_student_id: studentId,
-            claimed_at: new Date().toISOString(),
-          };
-        }
-        return r;
-      })
-    );
+    if (live) {
+      return claimRosterLive(rosterId)
+        .then(() => refreshLiveData())
+        .then(() => true)
+        .catch((error: Error) => {
+          console.error('Gagal klaim roster:', error.message);
+          return false;
+        });
+    }
 
-    // Auto-enroll if not already enrolled
-    setEnrollments((prev) => {
-      if (prev.some((e) => e.course_id === courseId && e.student_id === studentId)) {
-        return prev;
-      }
+    setRosters((previous) =>
+      previous.map((roster) =>
+        roster.id === rosterId
+          ? { ...roster, is_claimed: true, claimed_by_student_id: studentId, claimed_at: new Date().toISOString() }
+          : roster
+      )
+    );
+    setEnrollments((previous) => {
+      if (previous.some((enrollment) => enrollment.course_id === courseId && enrollment.student_id === studentId)) return previous;
       return [
-        ...prev,
+        ...previous,
         {
-          id: `enr-${Date.now()}`,
+          id: makeId('enrollment'),
           course_id: courseId,
           student_id: studentId,
           enrolled_via: 'roster',
@@ -373,26 +419,32 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
         },
       ];
     });
-
+    void studentName;
     return true;
   };
 
-  // ENROLLMENTS
-  const getStudentEnrollments = (studentId: string) => enrollments.filter((e) => e.student_id === studentId);
+  const getStudentEnrollments = (studentId: string) => enrollments.filter((enrollment) => enrollment.student_id === studentId);
 
   const joinCourseByCode = (code: string, studentId: string) => {
-    const course = getCourseByCode(code);
-    if (!course) {
-      return { success: false, error: 'Kode kelas tidak ditemukan. Mohon periksa kembali.' };
+    if (live) {
+      return joinCourse(code)
+        .then(async (courseId) => {
+          const snapshot = await refreshLiveData();
+          return {
+            success: true,
+            course: snapshot?.courses.find((course) => course.id === courseId),
+          };
+        })
+        .catch((error: Error) => ({ success: false, error: error.message }));
     }
 
-    // Check if already enrolled
-    const exists = enrollments.some((e) => e.course_id === course.id && e.student_id === studentId);
-    if (!exists) {
-      setEnrollments((prev) => [
-        ...prev,
+    const course = getCourseByCode(code);
+    if (!course) return { success: false, error: 'Kode kelas tidak ditemukan. Mohon periksa kembali.' };
+    if (!enrollments.some((enrollment) => enrollment.course_id === course.id && enrollment.student_id === studentId)) {
+      setEnrollments((previous) => [
+        ...previous,
         {
-          id: `enr-${Date.now()}`,
+          id: makeId('enrollment'),
           course_id: course.id,
           student_id: studentId,
           enrolled_via: 'code',
@@ -401,32 +453,39 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
         },
       ]);
     }
-
     return { success: true, course };
   };
 
-  // MODULES & ACTIVITIES
   const getModulesForCourse = (courseId: string) =>
-    modules.filter((m) => m.course_id === courseId).sort((a, b) => a.order_index - b.order_index);
-
+    modules.filter((module) => module.course_id === courseId).sort((a, b) => a.order_index - b.order_index);
   const getActivitiesForModule = (moduleId: string) =>
-    activities.filter((a) => a.module_id === moduleId).sort((a, b) => a.order_index - b.order_index);
-
-  const getActivity = (activityId: string) => activities.find((a) => a.id === activityId);
+    activities.filter((activity) => activity.module_id === moduleId).sort((a, b) => a.order_index - b.order_index);
+  const getActivity = (activityId: string) => activities.find((activity) => activity.id === activityId);
 
   const addModule = (courseId: string, title: string, description?: string, prerequisites?: string[]) => {
-    const count = modules.filter((m) => m.course_id === courseId).length;
     const newModule: CourseModule = {
-      id: `mod-${Date.now()}`,
+      id: makeId('module'),
       course_id: courseId,
       title,
       description,
-      order_index: count + 1,
+      order_index: modules.filter((module) => module.course_id === courseId).length + 1,
       is_published: true,
       prerequisites: prerequisites || [],
       created_at: new Date().toISOString(),
     };
-    setModules((prev) => [...prev, newModule]);
+    setModules((previous) => [...previous, newModule]);
+    if (live) {
+      void insertModule({
+        id: newModule.id,
+        courseId,
+        title,
+        description,
+        orderIndex: newModule.order_index,
+        prerequisites,
+      })
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal menyimpan modul:', error.message));
+    }
     return newModule;
   };
 
@@ -440,9 +499,8 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     reflection_prompt?: string;
     due_at?: string;
   }) => {
-    const count = activities.filter((a) => a.module_id === data.moduleId).length;
-    const newAct: Activity = {
-      id: `act-${Date.now()}`,
+    const newActivity: Activity = {
+      id: makeId('activity'),
       module_id: data.moduleId,
       title: data.title,
       type: data.type,
@@ -451,35 +509,60 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
       assignment_mode: data.assignment_mode,
       reflection_prompt: data.reflection_prompt,
       due_at: data.due_at,
-      order_index: count + 1,
+      order_index: activities.filter((activity) => activity.module_id === data.moduleId).length + 1,
       is_published: true,
       created_at: new Date().toISOString(),
     };
-    setActivities((prev) => [...prev, newAct]);
-    return newAct;
+    setActivities((previous) => [...previous, newActivity]);
+    if (live) {
+      const write = insertActivity({
+        id: newActivity.id,
+        moduleId: data.moduleId,
+        title: data.title,
+        type: data.type,
+        description: data.description,
+        content_markdown: data.content_markdown,
+        assignment_mode: data.assignment_mode,
+        reflection_prompt: data.reflection_prompt,
+        due_at: data.due_at,
+        orderIndex: newActivity.order_index,
+      });
+      pendingActivities.current.set(newActivity.id, write);
+      void write
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal menyimpan aktivitas:', error.message))
+        .finally(() => pendingActivities.current.delete(newActivity.id));
+    }
+    return newActivity;
   };
 
   const updateActivity = (id: string, updates: Partial<Activity>) => {
-    setActivities((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
+    setActivities((previous) => previous.map((activity) => (activity.id === id ? { ...activity, ...updates } : activity)));
+    if (live) {
+      void updateActivityLive(id, updates)
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal memperbarui aktivitas:', error.message));
+    }
   };
 
-  // QUIZZES
   const getQuizPayload = (activityId: string, isTeacher: boolean) => {
-    const questions = quizQuestions.filter((q) => q.activity_id === activityId);
-    if (isTeacher) {
-      return questions;
-    }
-    // As per blueprint & 0001_init.sql RPC get_quiz_payload: HIDE correct_keys and explanation from students!
-    return questions.map(({ correct_keys, explanation, ...rest }) => rest as QuizQuestion);
+    if (live) return getQuizPayloadLive(activityId, isTeacher);
+    const questions = quizQuestions.filter((question) => question.activity_id === activityId);
+    if (isTeacher) return questions;
+    return questions.map(({ correct_keys: _correctKeys, explanation: _explanation, ...question }) => question as QuizQuestion);
   };
 
   const addQuizQuestion = (question: Omit<QuizQuestion, 'id'>) => {
-    const newQ: QuizQuestion = {
-      ...question,
-      id: `q-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-    };
-    setQuizQuestions((prev) => [...prev, newQ]);
-    return newQ;
+    const newQuestion: QuizQuestion = { ...question, id: makeId('question') };
+    setQuizQuestions((previous) => [...previous, newQuestion]);
+    if (live) {
+      const dependency = pendingActivities.current.get(question.activity_id) || Promise.resolve();
+      void dependency
+        .then(() => insertQuizQuestion({ ...question, id: newQuestion.id }))
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal menyimpan soal kuis:', error.message));
+    }
+    return newQuestion;
   };
 
   const submitQuiz = (
@@ -489,46 +572,48 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     answers: Record<string, string | string[]>,
     timeTakenSeconds: number
   ) => {
-    const questions = quizQuestions.filter((q) => q.activity_id === activityId);
+    if (live) {
+      const clientSubmissionId = makeId('submission');
+      return submitQuizLive(activityId, answers, timeTakenSeconds, clientSubmissionId).then((result) => {
+        void studentId;
+        void studentName;
+        void refreshLiveData();
+        return {
+          submissionId: result.submissionId,
+          score: result.score,
+          maxPoints: result.maxPoints,
+          results: result.results,
+        };
+      });
+    }
+
+    const questions = quizQuestions.filter((question) => question.activity_id === activityId);
     let totalScore = 0;
     let maxPoints = 0;
-
-    const results = questions.map((q) => {
-      maxPoints += q.points || 10;
-      const studentAns = answers[q.id];
-      let isCorrect = false;
-
-      if (q.question_type === 'multiple') {
-        const studentArr = Array.isArray(studentAns) ? studentAns : [studentAns];
-        isCorrect =
-          studentArr.length === (q.correct_keys?.length || 0) &&
-          studentArr.every((k) => q.correct_keys?.includes(k));
-      } else {
-        isCorrect = studentAns === (q.correct_keys?.[0] || 'A');
-      }
-
-      const pointsEarned = isCorrect ? q.points || 10 : 0;
+    const results = questions.map((question) => {
+      maxPoints += question.points || 10;
+      const selected = answers[question.id];
+      const selectedKeys = Array.isArray(selected) ? selected : [selected];
+      const correct = question.question_type === 'multiple'
+        ? selectedKeys.length === (question.correct_keys?.length || 0) && selectedKeys.every((key) => question.correct_keys?.includes(key as string))
+        : selected === (question.correct_keys?.[0] || 'A');
+      const pointsEarned = correct ? question.points || 10 : 0;
       totalScore += pointsEarned;
-
       return {
-        question_id: q.id,
-        correct: isCorrect,
-        selected: studentAns,
+        question_id: question.id,
+        correct,
+        selected,
         points_earned: pointsEarned,
-        max_points: q.points || 10,
-        explanation: q.explanation,
+        max_points: question.points || 10,
+        explanation: question.explanation,
       };
     });
-
-    const previousAttempts = quizSubmissions.filter((s) => s.activity_id === activityId && s.student_id === studentId);
-    const attemptNo = previousAttempts.length + 1;
-
-    const newSub: QuizSubmission = {
-      id: `sub-quiz-${Date.now()}`,
+    const submission: QuizSubmission = {
+      id: makeId('quiz-submission'),
       activity_id: activityId,
       student_id: studentId,
       student_name: studentName,
-      attempt_no: attemptNo,
+      attempt_no: quizSubmissions.filter((item) => item.activity_id === activityId && item.student_id === studentId).length + 1,
       score: totalScore,
       max_points: maxPoints,
       answers_payload: answers,
@@ -537,28 +622,14 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
       status: 'submitted',
       submitted_at: new Date().toISOString(),
     };
-
-    setQuizSubmissions((prev) => [newSub, ...prev]);
-
-    // Mark completed
+    setQuizSubmissions((previous) => [submission, ...previous]);
     markActivityCompleted(studentId, activityId);
-
-    return {
-      submissionId: newSub.id,
-      score: totalScore,
-      maxPoints,
-      results,
-    };
+    return { submissionId: submission.id, score: totalScore, maxPoints, results };
   };
 
-  // GROUPS & ASSIGNMENTS
-  const getGroupsForActivity = (activityId: string) => studyGroups.filter((g) => g.activity_id === activityId);
-
-  const getStudentGroupForActivity = (activityId: string, studentId: string) => {
-    return studyGroups.find(
-      (g) => g.activity_id === activityId && g.members.some((m) => m.student_id === studentId)
-    );
-  };
+  const getGroupsForActivity = (activityId: string) => studyGroups.filter((group) => group.activity_id === activityId);
+  const getStudentGroupForActivity = (activityId: string, studentId: string) =>
+    studyGroups.find((group) => group.activity_id === activityId && group.members.some((member) => member.student_id === studentId));
 
   const submitAssignment = (data: {
     activityId: string;
@@ -567,77 +638,64 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     link: string;
     text?: string;
   }) => {
-    const act = getActivity(data.activityId);
-    if (!act) return { success: false, error: 'Aktivitas tidak ditemukan' };
+    const activity = getActivity(data.activityId);
+    if (!activity) return { success: false, error: 'Aktivitas tidak ditemukan' };
 
     let groupId: string | undefined;
     let groupName: string | undefined;
-
-    if (act.assignment_mode === 'group') {
+    if (activity.assignment_mode === 'group') {
       const group = getStudentGroupForActivity(data.activityId, data.studentId);
-      if (!group) {
-        return {
-          success: false,
-          error: 'Kamu belum terdaftar di kelompok manapun untuk tugas ini. Hubungi gurumu.',
-        };
-      }
-
-      // Security check: Only leader can submit (as specified in blueprint!)
+      if (!group) return { success: false, error: 'Kamu belum terdaftar di kelompok manapun untuk tugas ini. Hubungi gurumu.' };
       if (group.leader_id !== data.studentId) {
-        return {
-          success: false,
-          error: `Hanya ketua kelompok (${group.leader_name || 'Ketua'}) yang memiliki hak akses untuk mengumpulkan link tugas kelompok!`,
-        };
+        return { success: false, error: `Hanya ketua kelompok (${group.leader_name || 'Ketua'}) yang memiliki hak akses untuk mengumpulkan link tugas kelompok!` };
       }
-
       groupId = group.id;
       groupName = group.group_name;
     }
 
-    const newSub: AssignmentSubmission = {
-      id: `sub-ass-${Date.now()}`,
+    const submission: AssignmentSubmission = {
+      id: makeId('assignment-submission'),
       activity_id: data.activityId,
-      student_id: act.assignment_mode === 'individual' ? data.studentId : undefined,
-      student_name: act.assignment_mode === 'individual' ? data.studentName : undefined,
+      student_id: activity.assignment_mode === 'individual' ? data.studentId : undefined,
+      student_name: activity.assignment_mode === 'individual' ? data.studentName : undefined,
       group_id: groupId,
       group_name: groupName,
       submission_link: data.link,
       submission_text: data.text,
       submitted_at: new Date().toISOString(),
     };
+    setAssignmentSubmissions((previous) => [
+      submission,
+      ...previous.filter((item) => {
+        if (item.activity_id !== data.activityId) return true;
+        if (groupId) return item.group_id !== groupId;
+        return item.student_id !== data.studentId;
+      }),
+    ]);
 
-    setAssignmentSubmissions((prev) => {
-      // Upsert: replace if already submitted for this student or group
-      const filtered = prev.filter((s) => {
-        if (s.activity_id !== data.activityId) return true;
-        if (groupId && s.group_id === groupId) return false;
-        if (!groupId && s.student_id === data.studentId) return false;
-        return true;
-      });
-      return [newSub, ...filtered];
-    });
-
-    // Mark completion
-    if (groupId) {
-      const group = studyGroups.find((g) => g.id === groupId);
-      group?.members.forEach((m) => markActivityCompleted(m.student_id, data.activityId));
+    if (live) {
+      void saveAssignment({ activityId: data.activityId, studentId: activity.assignment_mode === 'individual' ? data.studentId : undefined, groupId, link: data.link, text: data.text })
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal menyimpan tugas:', error.message));
+    } else if (groupId) {
+      const group = studyGroups.find((item) => item.id === groupId);
+      group?.members.forEach((member) => markActivityCompleted(member.student_id, data.activityId));
     } else {
       markActivityCompleted(data.studentId, data.activityId);
     }
-
     return { success: true };
   };
 
   const gradeAssignment = (submissionId: string, grade: number, feedback: string) => {
-    setAssignmentSubmissions((prev) =>
-      prev.map((s) => (s.id === submissionId ? { ...s, grade, feedback } : s))
-    );
+    setAssignmentSubmissions((previous) => previous.map((submission) => submission.id === submissionId ? { ...submission, grade, feedback } : submission));
+    if (live) {
+      void gradeAssignmentLive(submissionId, grade, feedback)
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal menyimpan nilai:', error.message));
+    }
   };
 
-  // REFLECTIONS
-  const getReflectionsForActivity = (activityId: string) =>
-    reflections.filter((r) => r.activity_id === activityId);
-
+  const getReflectionsForActivity = (activityId: string) => reflections.filter((reflection) => reflection.activity_id === activityId);
   const submitReflection = (
     activityId: string,
     studentId: string,
@@ -645,8 +703,8 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
     text: string,
     mood: 'paham' | 'tertantang' | 'bantuan' | 'bingung'
   ) => {
-    const newRef: Reflection = {
-      id: `ref-${Date.now()}`,
+    const reflection: Reflection = {
+      id: makeId('reflection'),
       activity_id: activityId,
       student_id: studentId,
       student_name: studentName,
@@ -654,362 +712,154 @@ export function LMSProvider({ children }: { children: React.ReactNode }) {
       mood_tracker: mood,
       created_at: new Date().toISOString(),
     };
-
-    setReflections((prev) => {
-      const filtered = prev.filter((r) => !(r.activity_id === activityId && r.student_id === studentId));
-      return [newRef, ...filtered];
-    });
-
-    markActivityCompleted(studentId, activityId);
+    setReflections((previous) => [reflection, ...previous.filter((item) => !(item.activity_id === activityId && item.student_id === studentId))]);
+    if (live) {
+      void saveReflection({ activityId, studentId, text, mood })
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal menyimpan refleksi:', error.message));
+    } else {
+      markActivityCompleted(studentId, activityId);
+    }
   };
 
-  // COMPLETIONS & PROGRESS
   const isActivityCompleted = (studentId: string, activityId: string) =>
-    completions.some((c) => c.student_id === studentId && c.activity_id === activityId);
+    completions.some((completion) => completion.student_id === studentId && completion.activity_id === activityId);
 
   const markActivityCompleted = (studentId: string, activityId: string) => {
-    setCompletions((prev) => {
-      if (prev.some((c) => c.student_id === studentId && c.activity_id === activityId)) {
-        return prev;
-      }
-      return [
-        ...prev,
-        {
-          id: `cmp-${Date.now()}`,
-          student_id: studentId,
-          activity_id: activityId,
-          completed_at: new Date().toISOString(),
-        },
-      ];
+    setCompletions((previous) => {
+      if (previous.some((completion) => completion.student_id === studentId && completion.activity_id === activityId)) return previous;
+      return [...previous, { id: makeId('completion'), student_id: studentId, activity_id: activityId, completed_at: new Date().toISOString() }];
     });
+    if (live) {
+      void markCompleted(studentId, activityId)
+        .then(() => refreshLiveData())
+        .catch((error: Error) => console.error('Gagal menyimpan progres:', error.message));
+    }
   };
 
   const isModuleUnlocked = (studentId: string, moduleId: string) => {
-    const targetModule = modules.find((m) => m.id === moduleId);
-    if (!targetModule || !targetModule.prerequisites || targetModule.prerequisites.length === 0) {
-      return true;
-    }
-
-    // Check all activities in prerequisite modules are completed
-    return targetModule.prerequisites.every((prereqModId) => {
-      const prereqActivities = activities.filter((a) => a.module_id === prereqModId && a.is_published);
-      if (prereqActivities.length === 0) return true;
-      return prereqActivities.every((act) => isActivityCompleted(studentId, act.id));
+    const target = modules.find((module) => module.id === moduleId);
+    if (!target?.prerequisites?.length) return true;
+    return target.prerequisites.every((prerequisiteId) => {
+      const prerequisiteActivities = activities.filter((activity) => activity.module_id === prerequisiteId && activity.is_published);
+      return prerequisiteActivities.length === 0 || prerequisiteActivities.every((activity) => isActivityCompleted(studentId, activity.id));
     });
   };
 
   const getCourseProgress = (studentId: string, courseId: string) => {
-    const courseModuleIds = modules.filter((m) => m.course_id === courseId).map((m) => m.id);
-    const courseActivities = activities.filter((a) => courseModuleIds.includes(a.module_id) && a.is_published);
-    const total = courseActivities.length;
-    if (total === 0) return { total: 0, completed: 0, percent: 0 };
-
-    const completed = courseActivities.filter((a) => isActivityCompleted(studentId, a.id)).length;
-    const percent = Math.round((completed / total) * 100);
-
-    return { total, completed, percent };
+    const moduleIds = modules.filter((module) => module.course_id === courseId).map((module) => module.id);
+    const courseActivities = activities.filter((activity) => moduleIds.includes(activity.module_id) && activity.is_published);
+    const completed = courseActivities.filter((activity) => isActivityCompleted(studentId, activity.id)).length;
+    return { total: courseActivities.length, completed, percent: courseActivities.length ? Math.round((completed / courseActivities.length) * 100) : 0 };
   };
 
-  // AI CO-PILOT GENERATORS (Simulated or Edge Function backed)
+  // These generators stay local because AI generation is provided by the existing
+  // Edge Functions roadmap; saving the resulting draft uses the live mutations above.
   const generateMaterialAI = async (topic: string, grade: string, promptNotes?: string) => {
-    // Artificial latency for realism
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-
-    const markdown = `# Pembelajaran Mendalam: ${topic} (${grade})
-
-## 1. Pengantar & Tujuan Pembelajaran
-Selamat datang di modul pembelajaran mendalam tentang **${topic}**. Pada topik ini, kamu akan diajak tidak hanya menghafal konsep, tetapi juga memahami bagaimana konsep ini bekerja di dunia nyata dan mengasah nalar logismu.
-
-${promptNotes ? `> **Catatan Guru:** *${promptNotes}*\n` : ''}
----
-
-## 2. Konsep Inti (*Core Concept*)
-Konsep **${topic}** memiliki beberapa pilar utama yang saling terhubung:
-1. **Definisi Formal:** Menjelaskan makna mendasar dan terminologi yang digunakan dalam bidang ini.
-2. **Karakteristik Utama:** Mengidentifikasi ciri-ciri pembeda yang mempermudah klasifikasi.
-3. **Penerapan Sistematis:** Cara menerapkan langkah-langkah terstruktur dalam skenario penyelesaian masalah.
-
----
-
-## 3. Studi Kasus Nyata (*Real-World Case*)
-Bayangkan kamu sedang menghadapi situasi di mana kamu harus mengambil keputusan cepat dengan data yang terbatas. 
-- **Tantangan:** Bagaimana ${topic} dapat memandu proses penarikan kesimpulan tanpa bias?
-- **Analisis:** Mengurai variabel penting dan mengabaikan distraksi data yang tidak relevan.
-
----
-
-## 4. Rangkuman & Poin Penting
-- Pemahaman mendalam tercipta saat kita dapat menghubungkan teori dengan observasi langsung.
-- Gunakan pendekatan bertahap dalam mengkaji setiap sub-topik.`;
-
+    await new Promise((resolve) => setTimeout(resolve, 500));
     return {
       title: `Materi ${topic} - Pembelajaran Mendalam`,
-      markdown,
-      summary: `Materi terstruktur mengenai ${topic} untuk jenjang ${grade}, dilengkapi pengantar, studi kasus, dan poin refleksi.`,
+      markdown: `# ${topic} (${grade})\n\n## Pengantar\n\nMateri ini membantu siswa memahami **${topic}** melalui contoh nyata dan pemecahan masalah bertahap.\n\n${promptNotes ? `> Catatan guru: ${promptNotes}\n\n` : ''}## Poin penting\n\n- Hubungkan konsep dengan situasi sehari-hari.\n- Uji pemahaman melalui contoh baru.`,
+      summary: `Materi terstruktur mengenai ${topic} untuk ${grade}.`,
     };
   };
 
-  const generateQuizAI = async (
-    moduleTitle: string,
-    count: number = 3,
-    bloom: string = 'understand',
-    difficulty: string = 'medium'
-  ) => {
-    await new Promise((resolve) => setTimeout(resolve, 1400));
-
-    const sampleQuestions: Array<Omit<QuizQuestion, 'id' | 'activity_id'>> = [
+  const generateQuizAI = async (moduleTitle: string, count = 3, bloom = 'understand', difficulty = 'medium') => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const samples: Array<Omit<QuizQuestion, 'id' | 'activity_id'>> = [
       {
         question_type: 'single',
-        question_text: `Berdasarkan materi pada ${moduleTitle}, apa esensi utama yang membedakan pemikiran mendalam (deep learning) dengan hafalan biasa?`,
-        options: [
-          { key: 'A', text: 'Kemampuan menghubungkan konsep dengan pemecahan masalah di dunia nyata' },
-          { key: 'B', text: 'Kecepatan menghafal definisi kata per kata dari buku teks' },
-          { key: 'C', text: 'Banyaknya catatan tulisan tangan yang disalin ke buku' },
-          { key: 'D', text: 'Waktu belajar yang dihabiskan tanpa henti' },
-        ],
-        correct_keys: ['A'],
-        explanation: 'Deep learning berfokus pada transfer pemahaman dan penerapan konsep pada konteks baru.',
-        points: 20,
-        difficulty: difficulty as any,
-        bloom_taxonomy: bloom,
-        is_active: true,
+        question_text: `Apa gagasan utama yang dipelajari pada ${moduleTitle}?`,
+        options: [{ key: 'A', text: 'Menerapkan konsep pada masalah nyata' }, { key: 'B', text: 'Menghafal tanpa memahami' }, { key: 'C', text: 'Menyalin catatan' }, { key: 'D', text: 'Menghindari latihan' }],
+        correct_keys: ['A'], explanation: 'Pembelajaran mendalam mengutamakan pemahaman dan penerapan.', points: 20, difficulty: difficulty as QuizQuestion['difficulty'], bloom_taxonomy: bloom, is_active: true,
       },
       {
         question_type: 'single',
-        question_text: `Ketika kita mengisolasi variabel krusial dan mengesampingkan detail minor pada kasus ${moduleTitle}, metode ini paling selaras dengan prinsip:`,
-        options: [
-          { key: 'A', text: 'Abstraksi' },
-          { key: 'B', text: 'Redundansi Data' },
-          { key: 'C', text: 'Dekomposisi Berlebih' },
-          { key: 'D', text: 'Trial and Error' },
-        ],
-        correct_keys: ['A'],
-        explanation: 'Abstraksi menyaring aspek krusial dan mengabaikan hal-hal yang tidak relevan.',
-        points: 20,
-        difficulty: difficulty as any,
-        bloom_taxonomy: bloom,
-        is_active: true,
+        question_text: `Bagaimana siswa sebaiknya menguji pemahamannya tentang ${moduleTitle}?`,
+        options: [{ key: 'A', text: 'Mencoba konteks atau contoh yang baru' }, { key: 'B', text: 'Tidak mengerjakan latihan' }, { key: 'C', text: 'Menghafal jawaban' }, { key: 'D', text: 'Menghapus catatan' }],
+        correct_keys: ['A'], explanation: 'Transfer ke konteks baru menunjukkan pemahaman.', points: 20, difficulty: difficulty as QuizQuestion['difficulty'], bloom_taxonomy: bloom, is_active: true,
       },
       {
         question_type: 'single',
-        question_text: `Seorang siswa mampu membuat kesimpulan baru berdasarkan perbandingan dua skenario berbeda dalam topik ini. Berada pada level Bloom Taxonomy manakah kemampuan tersebut?`,
-        options: [
-          { key: 'A', text: 'Menganalisis (Analyze)' },
-          { key: 'B', text: 'Mengingat (Remember)' },
-          { key: 'C', text: 'Menghafal (Recall)' },
-          { key: 'D', text: 'Menjiplak (Duplicate)' },
-        ],
-        correct_keys: ['A'],
-        explanation: 'Membandingkan dan menarik kesimpulan berdasarkan pola adalah indikator kemampuan analisis (C4).',
-        points: 20,
-        difficulty: 'medium',
-        bloom_taxonomy: 'analyze',
-        is_active: true,
+        question_text: `Kemampuan membandingkan dua skenario dalam ${moduleTitle} termasuk proses apa?`,
+        options: [{ key: 'A', text: 'Menganalisis' }, { key: 'B', text: 'Menyalin' }, { key: 'C', text: 'Mengulang' }, { key: 'D', text: 'Menebak' }],
+        correct_keys: ['A'], explanation: 'Membandingkan skenario adalah bagian dari analisis.', points: 20, difficulty: 'medium', bloom_taxonomy: 'analyze', is_active: true,
       },
     ];
-
-    return sampleQuestions.slice(0, count);
+    return samples.slice(0, count);
   };
 
-  const generateAssignmentAI = async (topic: string, mode: 'individual' | 'group', indicator?: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 1300));
-
-    if (mode === 'group') {
-      return {
-        title: `Proyek Kolaboratif: Solusi Berbasis ${topic}`,
-        markdown: `### Skenario Proyek Tim:
-Dalam proyek ini, kelompokmu bertindak sebagai konsultan muda yang diminta memecahkan permasalahan nyata di lingkungan sekolah/masyarakat menggunakan prinsip **${topic}**.
-
-#### Pembagian Peran dalam Tim:
-- **Ketua Kelompok (Lead Investigator):** Mengkoordinasikan diskusi dan **satu-satunya yang mengunggah link pengumpulan**.
-- **Analisis Masalah:** Mengumpulkan fakta dan mengidentifikasi akar permasalahan.
-- **Perancang Solusi:** Menyusun diagram alur/konsep solusi terstruktur.
-- **Penyusun Dokumen:** Menuliskan laporan ringkas dan menyiapkan media presentasi.
-
-#### Kriteria Pengumpulan:
-Unggah link dokumen (Google Docs / Canva / GitHub) yang telah disetel ke mode publik.`,
-        rubric: [
-          { criterion: 'Kedalaman Analisis Konsep', max_points: 40, description: 'Kesesuaian penerapan prinsip dengan masalah' },
-          { criterion: 'Kreativitas Solusi', max_points: 30, description: 'Keunikan ide pemecahan' },
-          { criterion: 'Kolaborasi & Kerapian', max_points: 30, description: 'Keterlibatan anggota dan format presentasi' },
-        ],
-      };
-    }
-
+  const generateAssignmentAI = async (topic: string, mode: 'individual' | 'group') => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
     return {
-      title: `Tugas Analisis Mandiri: Penerapan ${topic}`,
-      markdown: `### Panduan Pengerjaan Tugas:
-1. Pilihlah satu studi kasus yang kamu temui sehari-hari berkaitan dengan **${topic}**.
-2. Tuliskan 3 langkah konkret pemecahan masalah dengan runtut dan logis.
-3. Tempelkan link file dokumen atau ketik jawaban langsung pada kolom yang disediakan.`,
-      rubric: [
-        { criterion: 'Kejelasan Argumen', max_points: 50, description: 'Logika berpikir runut dan mudah dipahami' },
-        { criterion: 'Kesesuaian Contoh', max_points: 50, description: 'Contoh relevan dengan materi' },
-      ],
+      title: `${mode === 'group' ? 'Proyek Kolaboratif' : 'Tugas Analisis'}: ${topic}`,
+      markdown: `### Panduan Pengerjaan\n\nTerapkan konsep **${topic}** pada studi kasus di sekitar kamu. Jelaskan langkah pemecahan masalah dengan runtut dan lampirkan tautan hasil kerja.`,
+      rubric: [{ criterion: 'Kedalaman analisis', max_points: 50, description: 'Konsep diterapkan dengan tepat.' }, { criterion: 'Kejelasan solusi', max_points: 50, description: 'Jawaban runtut dan relevan.' }],
     };
   };
 
   const generateReflectionAI = async (topic: string, focus: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 900));
-
+    await new Promise((resolve) => setTimeout(resolve, 400));
     return {
-      prompts: [
-        `Setelah mempelajari ${topic}, apa konsep paling mengejutkan atau membuka wawasan barumu?`,
-        `Jika kamu harus menjelaskan ${topic} kepada temanmu dengan kata-katamu sendiri dalam 2 kalimat, apa yang akan kamu katakan?`,
-        `Bagian mana dari topik ini yang masih terasa menantang atau membingungkan bagimu?`,
-      ],
+      prompts: [`Apa hal terpenting yang kamu pahami tentang ${topic}?`, `Bagian mana dari ${topic} yang masih menantang terkait ${focus}?`, 'Bagaimana kamu akan menerapkan pemahaman ini?'],
       suggestedMoods: ['paham', 'tertantang', 'bantuan', 'bingung'],
     };
   };
 
-  const generateGradingAI = async (studentAnswer: string, rubricCriteria?: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 1100));
-
-    const wordCount = studentAnswer.trim().split(/\s+/).length;
-    let suggested = 85;
-    if (wordCount > 60) suggested = 92;
-    if (wordCount < 20) suggested = 75;
-
+  const generateGradingAI = async (studentAnswer: string) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const wordCount = studentAnswer.trim().split(/\s+/).filter(Boolean).length;
     return {
-      suggestedGrade: suggested,
-      feedback: `Siswa menunjukkan penalaran yang runut dan mampu mengaitkan teori dengan contoh kasus secara logis. Struktur kalimat jelas dan tujuan solusi tercapai dengan baik.`,
-      strengths: [
-        'Argumentasi logis dan runut',
-        'Contoh kasus relevan dengan materi yang diajarkan',
-        'Penggunaan terminologi yang tepat',
-      ],
-      improvements: [
-        'Dapat diperdalam lagi pada analisis risiko atau skenario alternatif jika terjadi kendala.',
-      ],
+      suggestedGrade: wordCount > 60 ? 92 : wordCount < 20 ? 75 : 85,
+      feedback: 'Siswa menunjukkan penalaran yang runut dan mampu mengaitkan teori dengan contoh kasus secara logis.',
+      strengths: ['Argumentasi logis dan runut', 'Contoh kasus relevan dengan materi'],
+      improvements: ['Perdalam analisis risiko atau skenario alternatif.'],
     };
   };
 
-  // EXPORT GRADEBOOK
   const exportGradebookCSV = (courseId: string) => {
-    const courseRosters = rosters.filter((r) => r.course_id === courseId);
-    const courseModuleIds = modules.filter((m) => m.course_id === courseId).map((m) => m.id);
-    const courseActivities = activities.filter((a) => courseModuleIds.includes(a.module_id) && a.is_published);
-
+    const courseRosters = rosters.filter((roster) => roster.course_id === courseId);
+    const courseModuleIds = modules.filter((module) => module.course_id === courseId).map((module) => module.id);
+    const courseActivities = activities.filter((activity) => courseModuleIds.includes(activity.module_id) && activity.is_published);
     const headers = ['No', 'NIS', 'Nama Siswa', 'Status Klaim'];
-    courseActivities.forEach((a) => {
-      headers.push(`[${a.type.toUpperCase()}] ${a.title}`);
-    });
+    courseActivities.forEach((activity) => headers.push(`[${activity.type.toUpperCase()}] ${activity.title}`));
     headers.push('Rata-rata Nilai', 'Progress (%)');
-
-    const rows = courseRosters.map((r, index) => {
-      const studentId = r.claimed_by_student_id;
-      const rowData = [
-        String(index + 1),
-        r.nis || '-',
-        `"${r.full_name}"`,
-        r.is_claimed ? 'Sudah Terdaftar' : 'Belum Klaim',
-      ];
-
-      let scoresSum = 0;
-      let scoresCount = 0;
-
-      courseActivities.forEach((a) => {
-        if (!studentId) {
-          rowData.push('-');
-          return;
-        }
-
-        if (a.type === 'quiz') {
-          const sub = quizSubmissions.find((s) => s.activity_id === a.id && s.student_id === studentId);
-          if (sub) {
-            rowData.push(String(sub.score));
-            scoresSum += sub.score;
-            scoresCount++;
-          } else {
-            rowData.push('0');
-          }
-        } else if (a.type === 'assignment') {
-          const sub = assignmentSubmissions.find((s) => {
-            if (s.activity_id !== a.id) return false;
-            if (s.student_id === studentId) return true;
-            // check group
-            const group = studyGroups.find(
-              (g) => g.id === s.group_id && g.members.some((m) => m.student_id === studentId)
-            );
-            return !!group;
-          });
-          if (sub && sub.grade !== undefined) {
-            rowData.push(String(sub.grade));
-            scoresSum += sub.grade;
-            scoresCount++;
-          } else if (sub) {
-            rowData.push('Terkumpul (Belum Dinilai)');
-          } else {
-            rowData.push('Belum Kumpul');
-          }
-        } else if (a.type === 'reflection') {
-          const ref = reflections.find((rf) => rf.activity_id === a.id && rf.student_id === studentId);
-          rowData.push(ref ? `Terisi (${ref.mood_tracker})` : 'Belum Isi');
-        } else {
-          const completed = isActivityCompleted(studentId, a.id);
-          rowData.push(completed ? 'Selesai' : 'Belum');
-        }
+    const rows = courseRosters.map((roster, index) => {
+      const studentId = roster.claimed_by_student_id;
+      const row: string[] = [String(index + 1), roster.nis || '-', `"${roster.full_name}"`, roster.is_claimed ? 'Sudah Terdaftar' : 'Belum Klaim'];
+      let sum = 0;
+      let count = 0;
+      courseActivities.forEach((activity) => {
+        if (!studentId) return row.push('-');
+        if (activity.type === 'quiz') {
+          const submission = quizSubmissions.find((item) => item.activity_id === activity.id && item.student_id === studentId);
+          row.push(submission ? String(submission.score) : '0');
+          if (submission) { sum += submission.score; count += 1; }
+        } else if (activity.type === 'assignment') {
+          const submission = assignmentSubmissions.find((item) => item.activity_id === activity.id && (item.student_id === studentId || (item.group_id && studyGroups.find((group) => group.id === item.group_id && group.members.some((member) => member.student_id === studentId)))));
+          if (submission?.grade !== undefined) { row.push(String(submission.grade)); sum += submission.grade; count += 1; }
+          else row.push(submission ? 'Terkumpul (Belum Dinilai)' : 'Belum Kumpul');
+        } else if (activity.type === 'reflection') row.push(reflections.some((reflection) => reflection.activity_id === activity.id && reflection.student_id === studentId) ? 'Terisi' : 'Belum Isi');
+        else row.push(isActivityCompleted(studentId, activity.id) ? 'Selesai' : 'Belum');
       });
-
-      const avg = scoresCount > 0 ? (scoresSum / scoresCount).toFixed(1) : '-';
-      const progress = studentId ? getCourseProgress(studentId, courseId).percent + '%' : '0%';
-
-      rowData.push(avg, progress);
-      return rowData.join(',');
+      row.push(count ? (sum / count).toFixed(1) : '-', studentId ? `${getCourseProgress(studentId, courseId).percent}%` : '0%');
+      return row.join(',');
     });
-
     return [headers.join(','), ...rows].join('\n');
   };
 
   return (
-    <LMSContext.Provider
-      value={{
-        courses,
-        createCourse,
-        getCourse,
-        getCourseByCode,
-        rosters,
-        getRostersForCourse,
-        addRostersBulk,
-        claimRoster,
-        enrollments,
-        getStudentEnrollments,
-        joinCourseByCode,
-        modules,
-        activities,
-        getModulesForCourse,
-        getActivitiesForModule,
-        getActivity,
-        addModule,
-        addActivity,
-        updateActivity,
-        quizQuestions,
-        quizSubmissions,
-        getQuizPayload,
-        addQuizQuestion,
-        submitQuiz,
-        studyGroups,
-        assignmentSubmissions,
-        getGroupsForActivity,
-        getStudentGroupForActivity,
-        submitAssignment,
-        gradeAssignment,
-        reflections,
-        getReflectionsForActivity,
-        submitReflection,
-        completions,
-        isActivityCompleted,
-        markActivityCompleted,
-        isModuleUnlocked,
-        getCourseProgress,
-        generateMaterialAI,
-        generateQuizAI,
-        generateAssignmentAI,
-        generateReflectionAI,
-        generateGradingAI,
-        exportGradebookCSV,
-      }}
-    >
+    <LMSContext.Provider value={{
+      courses, createCourse, getCourse, getCourseByCode,
+      rosters, getRostersForCourse, addRostersBulk, claimRoster,
+      enrollments, getStudentEnrollments, joinCourseByCode,
+      modules, activities, getModulesForCourse, getActivitiesForModule, getActivity, addModule, addActivity, updateActivity,
+      quizQuestions, quizSubmissions, getQuizPayload, addQuizQuestion, submitQuiz,
+      studyGroups, assignmentSubmissions, getGroupsForActivity, getStudentGroupForActivity, submitAssignment, gradeAssignment,
+      reflections, getReflectionsForActivity, submitReflection,
+      completions, isActivityCompleted, markActivityCompleted, isModuleUnlocked, getCourseProgress,
+      generateMaterialAI, generateQuizAI, generateAssignmentAI, generateReflectionAI, generateGradingAI, exportGradebookCSV,
+    }}>
       {children}
     </LMSContext.Provider>
   );
@@ -1017,8 +867,6 @@ Unggah link dokumen (Google Docs / Canva / GitHub) yang telah disetel ke mode pu
 
 export function useLMS() {
   const context = useContext(LMSContext);
-  if (!context) {
-    throw new Error('useLMS must be used within an LMSProvider');
-  }
+  if (!context) throw new Error('useLMS must be used within an LMSProvider');
   return context;
 }

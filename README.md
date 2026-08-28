@@ -15,7 +15,8 @@ autentikasi hibrida presensi sekolah (**Preset Name**), dan kuis massal dengan s
 | 3. Implementasi Database & Security | ✅ Selesai | `0001_init.sql` (RLS + RPC `submit_quiz`, `get_quiz_payload`) |
 | 4. Backend / Edge Functions AI | ✅ Selesai | 6 Edge Functions Deno/TS + Gemini SDK |
 | 5. Antarmuka Frontend App | ✅ Selesai | Next.js 16 (App Router) + TypeScript + Tailwind CSS |
-| 6. Testing & Deployment | 🚀 Berjalan | Dev server / Live preview aktif di port 3000 |
+| 6. Integrasi Supabase Live | ✅ Selesai | PostgREST + RPC `join_course`, `claim_roster`, `get_quiz_payload`, `submit_quiz` |
+| 7. Testing & Deployment | 🚀 Berjalan | Dev server / Live preview aktif di port 3000 |
 
 ---
 
@@ -115,10 +116,11 @@ lessonlen-supabase/
 │   │       └── reflection-view.tsx        # Lembar Refleksi Deep Learning
 │   ├── context/
 │   │   ├── auth-context.tsx               # Context Autentikasi Hibrida
-│   │   └── lms-context.tsx                # Context State Store & Supabase Sync
+│   │   └── lms-context.tsx                # Context state, hydration & live mutations
 │   └── lib/
 │       ├── types.ts                       # TypeScript Data Models
-│       ├── mock-data.ts                   # Realistic Initial Dataset
+│       ├── mock-data.ts                   # Offline demo fallback only
+│       ├── lms-api.ts                     # PostgREST queries + RPC adapter
 │       └── supabase/client.ts             # Supabase Client SDK Wrapper
 ├── supabase/
 │   ├── config.toml                        # Supabase CLI Configuration
@@ -156,7 +158,16 @@ npm run dev
 Buka browser di `http://localhost:3000`.
 
 ### 3. Hubungkan ke Supabase Live (Opsional)
-Aplikasi sudah berjalan dengan data mock interaktif. Untuk menyambungkan ke proyek Supabase milikmu, pilih salah satu cara:
+Tanpa konfigurasi, aplikasi memakai fixture demo offline. Setelah Supabase dikonfigurasi,
+fixture tidak digunakan: daftar kelas, roster, modul, aktivitas, pengumpulan, refleksi,
+progres, dan nilai diambil dari PostgreSQL melalui PostgREST dengan RLS.
+
+Alur sensitif kuis memakai RPC dari migration, bukan query client biasa:
+- `join_course(p_class_code)` dan `claim_roster(p_roster_id)` untuk siswa.
+- `get_quiz_payload(p_activity_id)` hanya mengirim soal tanpa `correct_keys`.
+- `submit_quiz(...)` menghitung nilai di server dan mendukung idempotensi.
+
+Untuk menyambungkan ke proyek Supabase milikmu, pilih salah satu cara:
 
 **Cara A — file env (disarankan, konsisten antar perangkat)**
 ```bash
