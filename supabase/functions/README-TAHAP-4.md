@@ -1,0 +1,225 @@
+# Tahap 4 — Supabase Edge Functions (Backend AI)
+
+Semua logika yang menyentuh **Gemini API** dan **service role key** dijauhkan dari
+frontend dengan menempatkannya di **Edge Functions**. Frontend hanya memanggil
+URL fungsi ini, dan API key tetap aman di server.
+
+---
+
+## Daftar Edge Function
+
+| Nama | Fungsi | Dipakai untuk |
+|---|---|---|
+| `generate-material` | Buat draf materi sesuai topik & kelas | Content Builder |
+| `generate-quiz` | Buat draft soal dari materi bab (context injection) | Kuis |
+| `generate-assignment` | Buat draft tugas individu/kelompok + rubrik | Tugas |
+| `generate-reflection` | Buat pertanyaan refleksi Deep Learning | Refleksi |
+| `generate-grading` | Draf nilai + umpan balik dari teks jawaban | Penilaian |
+| `setup-teacher` | Promosikan user jadi guru setelah kode lisensi valid | Autentikasi |
+
+---
+
+## Prasyarat / Instalasi Supabase CLI
+
+Kamu perlu **Supabase CLI** untuk deploy. Instal:
+
+### macOS / Linux
+```bash
+npm install -g supabase
+```
+
+### Windows (jika belum ada)
+Buka PowerShell sebagai admin, jalankan salah satu:
+
+```bash
+npm install -g supabase
+```
+atau
+```bash
+winget install supabase
+```
+
+Cek berhasil:
+```bash
+supabase --version
+```
+
+---
+
+## Koneksikan ke project Supabase
+
+Jalankan dari *root folder* repo ini (`lessonlen-supabase`):
+
+```bash
+supabase login
+supabase link --project-ref <PROJECT_REF_KAMU>
+```
+
+Ganti `<PROJECT_REF_KAMU>` dengan **Project Ref** Supabase kamu.
+Cara cari Project Ref:
+- Buka Dashboard Supabase → **Settings → General → Project Settings**.
+- Salin **Project Ref** (biasanya 21 karakter alfanumerik).
+- Atau project ref adalah bagian depan dari Project URL:
+  - Project URL: `https://abcdefghijk.supabase.co`
+  - Project Ref: `abcdefghijk`
+
+---
+
+## Set Secret Environment Variables
+
+Ganti `YOUR_GEMINI_KEY` dengan API key dari **Google AI Studio**
+(https://aistudio.google.com/apikey).
+
+### Pilih key Supabase mana yang dipakai?
+
+Saat ini ada dua bentuk key:
+
+| Key | Isi ke env | Untuk |
+|---|---|---|
+| **Secret (baru)** <br>`sb_secret_...` | `SUPABASE_SECRET_KEY` | Server/Edge — pengganti service_role (disarankan) |
+| **Legacy service_role** <br>`eyJ...` | `SUPABASE_SERVICE_ROLE_KEY` | Server/Edge — masih berlaku |
+| **Publishable (baru)** <br>`sb_publishable_...` | tidak dipakai di Edge ini | Frontend/browser (pengganti anon) |
+| **Legacy anon** <br>`eyJ...` | tidak dipakai di Edge ini | Frontend/browser |
+
+> Kode Edge Function kami sudah mendukung **keduanya**. Kalau kamu pakai key baru,
+> isi `SUPABASE_SECRET_KEY`. Kalau masih pakai legacy, isi `SUPABASE_SERVICE_ROLE_KEY`.
+
+> ⚠️ **Supabase CLI tidak mengizinkan nama secret yang diawali `SUPABASE_`**
+> (misalnya `SUPABASE_SECRET_KEY` dilewati). Karena itu gunakan nama **tanpa prefix**:
+> `SECRET_KEY` dan `ANON_KEY`.
+
+### Cara 1 — Pakai CLI (disarankan, nama tanpa prefix `SUPABASE_`)
+```powershell
+supabase secrets set GEMINI_API_KEY=YOUR_GEMINI_KEY
+supabase secrets set AI_DAILY_LIMIT=50
+supabase secrets set SECRET_KEY=sb_secret_...
+supabase secrets set ANON_KEY=sb_publishable_...
+```
+
+### Lambang / Kode yang dibaca Edge Function
+
+Kode kami membaca (urutan prioritas):
+
+| Variabel | Nilai yang dipakai |
+|---|---|
+| `GEMINI_API_KEY` | API key Gemini |
+| `AI_DAILY_LIMIT` | batas pemakaian AI harian |
+| `SECRET_KEY` | secret / service_role (disarankan, karena tanpa prefix `SUPABASE_`) |
+| `ANON_KEY` | anon / publishable untuk verifikasi user |
+| `SUPABASE_SECRET_KEY` | tetap didukung (jika diisi via dashboard) |
+| `SUPABASE_SERVICE_ROLE_KEY` | tetap didukung (legacy) |
+| `SUPABASE_PUBLISHABLE_KEY` / `SUPABASE_ANON_KEY` | tetap didukung (legacy) |
+
+### Cara 2 — Pakai legacy key (masih bisa, tapi pakai nama `SECRET_KEY` agar CLI tidak menolak)
+```powershell
+supabase secrets set GEMINI_API_KEY=YOUR_GEMINI_KEY
+supabase secrets set AI_DAILY_LIMIT=50
+supabase secrets set SECRET_KEY=<service_role JWT dari Legacy API Keys>
+```
+
+### Cara 3 — Via Dashboard
+1. Dashboard → **Settings → API Keys**.
+2. Salin salah satu:
+   - **Secret key** (`sb_secret_...`) jika memakai key baru, atau
+   - **service_role** di tab **Legacy API Keys** jika memakai yang lama.
+3. Dashboard → **Settings → Edge Functions → Secrets** (atau **Secrets**).
+4. Tambahkan:
+   - `GEMINI_API_KEY` = kunci Gemini
+   - `AI_DAILY_LIMIT` = `50`
+   - `SECRET_KEY` = `sb_secret_...` (atau service_role)
+
+> ⚠️ **JANGAN memasukkan `sb_publishable` / `anon` ke `SECRET_KEY`.**
+> `SECRET_KEY` harus diisi secret/server-only.
+
+---
+
+## Deploy semua fungsi
+
+```bash
+supabase functions deploy generate-material
+supabase functions deploy generate-quiz
+supabase functions deploy generate-assignment
+supabase functions deploy generate-reflection
+supabase functions deploy generate-grading
+supabase functions deploy setup-teacher
+```
+
+Atau deploy sekaligus satu per satu di atas.
+
+---
+
+## Menguji fungsi dari terminal
+
+### Test `setup-teacher`
+```bash
+curl -X POST "https://<PROJECT_REF>.supabase.co/functions/v1/setup-teacher" \
+  -H "Authorization: Bearer <ACCESS_TOKEN_USER_GURU>" \
+  -H "Content-Type: application/json" \
+  -d '{"license_code":"SCHOOL-0001"}'
+```
+
+### Test `generate-material`
+```bash
+curl -X POST "https://<PROJECT_REF>.supabase.co/functions/v1/generate-material" \
+  -H "Authorization: Bearer <ACCESS_TOKEN_USER_GURU>" \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"Fotosintesis","grade_level":"Kelas 7","course_id":"<COURSE_ID>"}'
+```
+
+- `<ACCESS_TOKEN_USER_GURU>` = token JWT user guru yang sudah login
+  (nanti didapat dari frontend, atau lewat browser DevTools).
+- `<COURSE_ID>` = UUID kursus yang dibuat guru.
+
+### Test `generate-quiz`
+```bash
+curl -X POST "https://<PROJECT_REF>.supabase.co/functions/v1/generate-quiz" \
+  -H "Authorization: Bearer <ACCESS_TOKEN_USER_GURU>" \
+  -H "Content-Type: application/json" \
+  -d '{"course_id":"<COURSE_ID>","module_id":"<MODULE_ID>","count":5,"bloom_taxonomy":"understand","difficulty":"medium"}'
+```
+
+---
+
+## Kode kesalahan yang mungkin muncul
+
+| Kode | Arti | Penyebab |
+|---|---|---|
+| `401 Unauthorized` | Tidak login / JWT invalid | Belum pakai token, token kadaluarsa |
+| `403 Teacher only` | Bukan guru | Role belum diubah ke `teacher` |
+| `403 Forbidden` | Bukan guru pengampu course | `course_id` bukan milik guru itu |
+| `404 Course not found` | ID kursus salah | Pastikan `course_id` benar |
+| `404 Invalid school license code` | Kode sekolah salah | Pastikan `SCHOOL-0001` ada di tabel `schools` |
+| `400 Module has no material` | Modul belum ada materi | Tambahkan materi dulu sebelum generate kuis |
+| `429 Daily AI quota exceeded` | Kuota habis | Naikkan `AI_DAILY_LIMIT` atau tunggu besok |
+| `500` | Server error | Cek log Edge Function |
+
+---
+
+## Flow yang benar di aplikasi
+
+1. Guru menekan tombol **Generate with AI**.
+2. Frontend memanggil Edge Function yang sesuai.
+3. Edge Function:
+   - Verifikasi JWT + role teacher.
+   - Ambil konteks (jika perlu) dari database.
+   - Panggil Gemini dengan `responseMimeType: application/json`.
+   - Validasi JSON dengan Zod.
+   - Simpan log ke `ai_generations`.
+   - Return JSON draft ke frontend.
+4. Frontend menampilkan hasil di **Preview Editor**.
+5. Guru mengedit / menyetujui / membuang.
+6. Guru menyimpan resmi ke database (materi, soal, tugas, atau refleksi).
+
+> AI **tidak pernah menyimpan langsung** ke tabel utama. Guru selalu *teacher-in-the-loop*.
+
+---
+
+## Catatan keamanan penting
+
+- **Jangan pernah memblokir atau membiarkan client menetapkan role `teacher`**
+  lewat form pendaftaran. Gunakan `setup-teacher` dengan kode lisensi sekolah
+  yang hanya diketahui sekolah.
+- **Jangan pernah menaruh API key Gemini di frontend** atau di repo GitHub.
+  Simpan hanya di Supabase secrets.
+- **Umpan balik AI grading bukan keputusan final.** Guru harus mereview sebelum
+  menentukan nilai resmi.

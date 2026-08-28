@@ -1,0 +1,28 @@
+# Supabase CLI config untuk Lessonlen LMS.
+# File ini dipakai ketika menjalankan:
+#   supabase functions serve
+#   supabase functions deploy
+#   supabase db push
+#
+# Ganti project_id dengan project ref Supabase kamu (opsional, CLI juga bisa
+# mendeteksi dari `supabase link`).
+
+project_id = "lessonlen-lms"
+
+[functions.generate-material]
+verify_jwt = true
+
+[functions.generate-quiz]
+verify_jwt = true
+
+[functions.generate-assignment]
+verify_jwt = true
+
+[functions.generate-reflection]
+verify_jwt = true
+
+[functions.generate-grading]
+verify_jwt = true
+
+[functions.setup-teacher]
+verify_jwt = true
