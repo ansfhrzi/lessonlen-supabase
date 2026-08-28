@@ -55,6 +55,7 @@ export default function TeacherAuthPage() {
     const res = await registerTeacher({
       fullName,
       email,
+      password,
       whatsapp,
       schoolName,
       licenseCode,

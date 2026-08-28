@@ -28,21 +28,58 @@ export function QuizRunner({ activity, onFinish }: QuizRunnerProps) {
   const { user } = useAuth();
   const { getQuizPayload, submitQuiz, quizSubmissions } = useLMS();
 
-  // Load questions without answers (per RPC get_quiz_payload specification!)
-  const questions = getQuizPayload(activity.id, false);
+  const [questions, setQuestions] = useState<QuizQuestion[]>([]);
+  const [isLoadingQuestions, setIsLoadingQuestions] = useState(true);
 
-  // Check if student already submitted
+  // Check if student already submitted. Live submissions are loaded by the LMS
+  // provider from Supabase and are shown with the same review shape as demo data.
   const existingSubmission = user
     ? quizSubmissions.find((s) => s.activity_id === activity.id && s.student_id === user.id)
     : null;
 
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [timeLeft, setTimeLeft] = useState<number>(15 * 60); // 15 mins default
   const [isSubmitted, setIsSubmitted] = useState<boolean>(!!existingSubmission);
-  const [submissionResult, setSubmissionResult] = useState<any | null>(existingSubmission || null);
+  const [submissionResult, setSubmissionResult] = useState<any | null>(
+    existingSubmission
+      ? { ...existingSubmission, max_points: existingSubmission.max_points || 100, results: existingSubmission.results_payload || [] }
+      : null
+  );
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [showCheatWarning, setShowCheatWarning] = useState(false);
+
+  // In live mode getQuizPayload calls the server-side RPC, which deliberately
+  // omits correct_keys and explanations for students.
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingQuestions(true);
+    Promise.resolve(getQuizPayload(activity.id, false))
+      .then((payload) => {
+        if (!cancelled) setQuestions(payload);
+      })
+      .catch((error: Error) => {
+        if (!cancelled) setSubmitError(error.message);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingQuestions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activity.id]);
+
+  useEffect(() => {
+    if (existingSubmission && !isSubmitted) {
+      setIsSubmitted(true);
+      setSubmissionResult({
+        ...existingSubmission,
+        max_points: existingSubmission.max_points || 100,
+        results: existingSubmission.results_payload || [],
+      });
+    }
+  }, [existingSubmission, isSubmitted]);
 
   const storageKey = `quiz_draft_${activity.id}_${user?.id || 'anon'}`;
 
@@ -102,22 +139,29 @@ export function QuizRunner({ activity, onFinish }: QuizRunnerProps) {
     localStorage.setItem(storageKey, JSON.stringify(nextAnswers));
   };
 
-  const handleSubmitQuiz = () => {
-    if (!user) return;
+  const handleSubmitQuiz = async () => {
+    if (!user || isSubmitted) return;
+    setSubmitError(null);
     const timeTaken = 15 * 60 - timeLeft;
-    const res = submitQuiz(activity.id, user.id, user.full_name, answers, Math.max(10, timeTaken));
-    setSubmissionResult(res);
-    setIsSubmitted(true);
-    localStorage.removeItem(storageKey);
-
-    // Fire confetti celebration!
     try {
-      confetti({
-        particleCount: 80,
-        spread: 60,
-        origin: { y: 0.6 },
-      });
-    } catch (e) {}
+      const response = await Promise.resolve(
+        submitQuiz(activity.id, user.id, user.full_name, answers, Math.max(10, timeTaken))
+      );
+      setSubmissionResult({ ...response, max_points: response.maxPoints, results: response.results });
+      setIsSubmitted(true);
+      localStorage.removeItem(storageKey);
+
+      // Fire confetti celebration!
+      try {
+        confetti({
+          particleCount: 80,
+          spread: 60,
+          origin: { y: 0.6 },
+        });
+      } catch (e) {}
+    } catch (error: any) {
+      setSubmitError(error.message || 'Gagal mengirim jawaban kuis.');
+    }
   };
 
   const formatTime = (seconds: number) => {
@@ -219,9 +263,20 @@ export function QuizRunner({ activity, onFinish }: QuizRunnerProps) {
     );
   }
 
+  if (isLoadingQuestions) {
+    return (
+      <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center space-y-3">
+        <HelpCircle className="w-10 h-10 text-indigo-300 mx-auto animate-pulse" />
+        <h4 className="font-bold text-sm text-slate-800">Memuat soal kuis...</h4>
+        <p className="text-xs text-slate-500">Soal diambil secara aman dari Supabase.</p>
+      </div>
+    );
+  }
+
   if (questions.length === 0) {
     return (
       <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center space-y-3">
+        {submitError && <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2">{submitError}</p>}
         <HelpCircle className="w-10 h-10 text-slate-300 mx-auto" />
         <h4 className="font-bold text-sm text-slate-800">Kuis Belum Memiliki Soal</h4>
         <p className="text-xs text-slate-500">Guru belum menerbitkan bank soal untuk aktivitas ini.</p>

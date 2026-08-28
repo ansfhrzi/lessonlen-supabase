@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/auth-context';
 import { useLMS } from '@/context/lms-context';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
 import {
   BookOpen,
   Plus,
@@ -38,15 +39,22 @@ export default function StudentDashboard() {
   const enrolledCourseIds = studentEnrollments.map((e) => e.course_id);
   const enrolledCourses = courses.filter((c) => enrolledCourseIds.includes(c.id));
 
-  // If no enrollments yet, fallback to first course for testing
-  const displayCourses = enrolledCourses.length > 0 ? enrolledCourses : [courses[0]];
+  // Only the offline demo uses a first-course fallback. In live mode an empty
+  // enrollment list must stay empty and never render an undefined course card.
+  const displayCourses = enrolledCourses.length > 0
+    ? enrolledCourses
+    : isSupabaseConfigured()
+    ? []
+    : courses[0]
+    ? [courses[0]]
+    : [];
 
-  const handleJoin = (e: React.FormEvent) => {
+  const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
     setJoinNotice(null);
-    const res = joinCourseByCode(classCodeInput, studentId);
+    const res = await Promise.resolve(joinCourseByCode(classCodeInput, studentId));
     if (res.success) {
-      setJoinNotice({ type: 'success', text: `Berhasil bergabung ke kelas ${res.course?.title}!` });
+      setJoinNotice({ type: 'success', text: `Berhasil bergabung ke kelas ${res.course?.title || 'baru'}!` });
       setClassCodeInput('');
       setTimeout(() => setShowJoinModal(false), 1500);
     } else {

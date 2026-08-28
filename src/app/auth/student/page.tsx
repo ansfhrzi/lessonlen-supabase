@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/auth-context';
 import { useLMS } from '@/context/lms-context';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
 import {
   BookOpen,
   Users,
@@ -20,8 +21,8 @@ import {
 
 export default function StudentAuthPage() {
   const router = useRouter();
-  const { loginAsStudent, quickLoginDemo, updateUserProfile } = useAuth();
-  const { getCourseByCode, getRostersForCourse, claimRoster } = useLMS();
+  const { user, loginAsStudent, quickLoginDemo, updateUserProfile } = useAuth();
+  const { getCourseByCode, getRostersForCourse, claimRoster, joinCourseByCode } = useLMS();
 
   const [authTab, setAuthTab] = useState<'login' | 'claim'>('login');
 
@@ -51,19 +52,35 @@ export default function StudentAuthPage() {
     }
   };
 
-  const handleCheckCode = (e: React.FormEvent) => {
+  const handleCheckCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    const course = getCourseByCode(classCodeInput);
-    if (!course) {
-      setErrorMsg('Kode kelas tidak ditemukan. Mohon periksa kode yang diberikan guru.');
-      return;
+
+    // A student must be authenticated before the live join_course RPC can
+    // expose the class and its roster under RLS.
+    if (isSupabaseConfigured()) {
+      if (!user || user.role !== 'student') {
+        setErrorMsg('Masuk dengan akun siswa terlebih dahulu, lalu gunakan fitur klaim nama presensi.');
+        return;
+      }
+      const result = await Promise.resolve(joinCourseByCode(classCodeInput, user.id));
+      if (!result.success || !result.course) {
+        setErrorMsg(result.error || 'Kode kelas tidak ditemukan.');
+        return;
+      }
+      setSelectedCourse(result.course);
+    } else {
+      const course = getCourseByCode(classCodeInput);
+      if (!course) {
+        setErrorMsg('Kode kelas tidak ditemukan. Mohon periksa kode yang diberikan guru.');
+        return;
+      }
+      setSelectedCourse(course);
     }
-    setSelectedCourse(course);
     setStep(2);
   };
 
-  const handleClaimSubmit = (e: React.FormEvent) => {
+  const handleClaimSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRosterId || !selectedCourse) {
       setErrorMsg('Pilih nama lengkapmu dari daftar presensi terlebih dahulu.');
@@ -74,8 +91,14 @@ export default function StudentAuthPage() {
     const targetRoster = rosters.find((r) => r.id === selectedRosterId);
     if (!targetRoster) return;
 
-    const studentId = `student-${Date.now()}`;
-    claimRoster(selectedCourse.id, selectedRosterId, studentId, targetRoster.full_name);
+    const studentId = user?.role === 'student' ? user.id : `student-${Date.now()}`;
+    const claimed = await Promise.resolve(
+      claimRoster(selectedCourse.id, selectedRosterId, studentId, targetRoster.full_name)
+    );
+    if (!claimed) {
+      setErrorMsg('Nama ini sudah diklaim atau sesi siswa tidak lagi aktif. Silakan coba lagi.');
+      return;
+    }
 
     updateUserProfile({
       id: studentId,

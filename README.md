@@ -14,8 +14,9 @@ autentikasi hibrida presensi sekolah (**Preset Name**), dan kuis massal dengan s
 | 2. Skema Database & ERD | ✅ Selesai | Perancangan 15 tabel relasional + constraints |
 | 3. Implementasi Database & Security | ✅ Selesai | `0001_init.sql` (RLS + RPC `submit_quiz`, `get_quiz_payload`) |
 | 4. Backend / Edge Functions AI | ✅ Selesai | 6 Edge Functions Deno/TS + Gemini SDK |
-| 5. Antarmuka Frontend App | ✅ Selesai | Next.js 14 (App Router) + TypeScript + Tailwind CSS |
-| 6. Testing & Deployment | 🚀 Berjalan | Dev server / Live preview aktif di port 3000 |
+| 5. Antarmuka Frontend App | ✅ Selesai | Next.js 16 (App Router) + TypeScript + Tailwind CSS |
+| 6. Integrasi Supabase Live | ✅ Selesai | PostgREST + RPC `join_course`, `claim_roster`, `get_quiz_payload`, `submit_quiz` |
+| 7. Testing & Deployment | 🚀 Berjalan | Dev server / Live preview aktif di port 3000 |
 
 ---
 
@@ -115,10 +116,11 @@ lessonlen-supabase/
 │   │       └── reflection-view.tsx        # Lembar Refleksi Deep Learning
 │   ├── context/
 │   │   ├── auth-context.tsx               # Context Autentikasi Hibrida
-│   │   └── lms-context.tsx                # Context State Store & Supabase Sync
+│   │   └── lms-context.tsx                # Context state, hydration & live mutations
 │   └── lib/
 │       ├── types.ts                       # TypeScript Data Models
-│       ├── mock-data.ts                   # Realistic Initial Dataset
+│       ├── demo-data.ts                   # Offline demo fallback only
+│       ├── lms-api.ts                     # PostgREST queries + RPC adapter
 │       └── supabase/client.ts             # Supabase Client SDK Wrapper
 ├── supabase/
 │   ├── config.toml                        # Supabase CLI Configuration
@@ -156,7 +158,45 @@ npm run dev
 Buka browser di `http://localhost:3000`.
 
 ### 3. Hubungkan ke Supabase Live (Opsional)
-Aplikasi sudah berjalan dengan data mock interaktif. Untuk menyambungkan ke proyek Supabase milikmu:
+Tanpa konfigurasi, aplikasi memakai fixture demo offline. Setelah Supabase dikonfigurasi,
+fixture tidak digunakan: daftar kelas, roster, modul, aktivitas, pengumpulan, refleksi,
+progres, dan nilai diambil dari PostgreSQL melalui PostgREST dengan RLS.
+
+Alur sensitif kuis memakai RPC dari migration, bukan query client biasa:
+- `join_course(p_class_code)` dan `claim_roster(p_roster_id)` untuk siswa.
+- `get_quiz_payload(p_activity_id)` hanya mengirim soal tanpa `correct_keys`.
+- `submit_quiz(...)` menghitung nilai di server dan mendukung idempotensi.
+
+Untuk menyambungkan ke proyek Supabase milikmu, pilih salah satu cara:
+
+**Cara A — file env (disarankan, konsisten antar perangkat)**
+```bash
+cp .env.example .env.local   # lalu isi Project URL + anon/publishable key
+npm run dev                  # restart agar nilai env terbaca
+```
+
+**Cara B — lewat UI (tanpa file, tersimpan di browser)**
 1. Klik tombol **"Mode Demo Aktif" / "Konfigurasi Supabase"** di pojok kanan atas Navbar.
 2. Masukkan **Project URL** dan **Anon Key**.
-3. Pastikan skrip `supabase/migrations/0001_init.sql` sudah dijalankan di Supabase SQL Editor.
+
+Untuk kedua cara: pastikan `supabase/migrations/0001_init.sql` sudah dijalankan di
+Supabase SQL Editor, dan Edge Functions sudah di-deploy
+(`supabase/functions/README-TAHAP-4.md`).
+
+> Nilai `NEXT_PUBLIC_*` dibaca saat build. Setelah mengubah `.env.local`,
+> jalankan ulang `npm run dev` / `npm run build`.
+> Jangan pernah menaruh *secret key* di frontend — hanya untuk Supabase Secrets.
+
+### 4. Perintah lain
+```bash
+npm run build      # build produksi (sekaligus type check)
+npm run start      # jalankan hasil build
+npm run typecheck  # tsc --noEmit
+```
+
+### Catatan dependensi
+Frontend memakai **Next.js 16 + React 19**. Upgrade dari Next 14 dilakukan untuk
+menutup 2 kerentanan `high` (advisory `next` dan `postcss`); hasil `npm audit`
+sekarang **0 vulnerabilities**. Skrip `lint` dihapus karena `next lint` sudah
+tidak tersedia di Next.js 16.
+
