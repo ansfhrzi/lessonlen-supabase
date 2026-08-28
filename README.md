@@ -14,30 +14,8 @@ autentikasi hibrida presensi sekolah (**Preset Name**), dan kuis massal dengan s
 | 2. Skema Database & ERD | ✅ Selesai | Perancangan 15 tabel relasional + constraints |
 | 3. Implementasi Database & Security | ✅ Selesai | `0001_init.sql` (RLS + RPC `submit_quiz`, `get_quiz_payload`) |
 | 4. Backend / Edge Functions AI | ✅ Selesai | 6 Edge Functions Deno/TS + Gemini SDK |
-| 5. Antarmuka Frontend App | ✅ Selesai | Dua implementasi, lihat bagian di bawah |
-| 6. Testing & Deployment | ⏳ Belum dimulai | Uji beban, audit RLS, deploy produksi |
-
----
-
-## Dua implementasi frontend (Tahap 5)
-
-Repo ini memuat **dua** aplikasi frontend hasil dua sesi pengerjaan. Keduanya
-dipertahankan agar tidak ada pekerjaan yang hilang:
-
-| | `src/` (root) | `frontend/` |
-|---|---|---|
-| Asal | PR #2 (`arena/01a0475b`) | PR ini (`arena/01a0495d`) |
-| Stack | Next.js 14 + Tailwind | Next.js 16 + TypeScript strict + Tailwind + `@supabase/ssr` |
-| Sumber data | **Mock** (`src/lib/mock-data.ts`), Supabase opsional | **Supabase live** (RLS + RPC + Edge Functions) |
-| Auth | Demo 1-klik / NIS lab, role di client | Supabase Auth (email + Google), role dari `profiles` + `setup-teacher` |
-| Mutasi data | State di browser | Server Actions → RPC (`join_course`, `claim_roster`, `submit_quiz`) |
-| Proteksi rute | Context React | `src/proxy.ts` + `requireRole()` di server |
-| Cocok untuk | Demo UI / presentasi tanpa backend | Jalan produksi terhadap project Supabase |
-
-Dokumentasi lengkap `frontend/`: [`frontend/README.md`](frontend/README.md).
-
-> **Rekomendasi:** bila prototipe `src/` sudah tidak diperlukan, hapus dalam satu
-> commit terpisah agar riwayatnya tetap jelas.
+| 5. Antarmuka Frontend App | ✅ Selesai | Next.js 16 (App Router) + TypeScript + Tailwind CSS |
+| 6. Testing & Deployment | 🚀 Berjalan | Dev server / Live preview aktif di port 3000 |
 
 ---
 
@@ -96,14 +74,12 @@ Dokumentasi lengkap `frontend/`: [`frontend/README.md`](frontend/README.md).
 
 ## Akun Demo Cepat (1-Klik Tanpa Login)
 
-Khusus aplikasi prototipe di `src/` — tersedia tombol pintas di navbar dan halaman depan:
+Tersedia tombol pintas di navbar dan halaman depan untuk pengujian instan:
 - **Guru Pengampu**: `Ahmad Fauzi, S.Pd., M.Kom.` (SMP Labschool Cendekia)
 - **Siswa 1**: `Budi Santoso` (NIS: `202401`) — Ketua Kelompok Turing
 - **Siswa 2**: `Siti Nurhaliza` (NIS: `202402`) — Anggota Kelompok Turing
 - **Kode Kelas Contoh**: `INF701` (Informatika VII - Berpikir Komputasional & AI)
 - **Kode Lisensi Sekolah**: `SCHOOL-0001`
-
-Aplikasi `frontend/` tidak memakai akun demo: login dilakukan ke Supabase Auth sungguhan.
 
 ---
 
@@ -111,11 +87,7 @@ Aplikasi `frontend/` tidak memakai akun demo: login dilakukan ke Supabase Auth s
 
 ```text
 lessonlen-supabase/
-├── Analisis-Saran-Rekomendasi-LMS.md
-├── Blueprint Dokumentasi ... bagian ke 1.md
-├── Blueprint Dokumentasi ... bagian ke 2.md
-│
-├── src/                                   # Prototipe frontend (mock data) — PR #2
+├── src/
 │   ├── app/                               # Next.js App Router
 │   │   ├── page.tsx                       # Landing Page & Demo Launcher
 │   │   ├── layout.tsx                     # Global Root Layout
@@ -132,21 +104,22 @@ lessonlen-supabase/
 │   ├── components/
 │   │   ├── layout/navbar.tsx              # Top Navbar & Role Switcher
 │   │   ├── modals/supabase-modal.tsx      # Modal Konfigurasi Supabase URL & Anon Key
-│   │   ├── teacher/                       # ai-generator-modal, roster-manager,
-│   │   │                                  # gradebook-view, reflections-tab
-│   │   └── student/                       # quiz-runner, assignment-view, reflection-view
-│   ├── context/                           # auth-context.tsx, lms-context.tsx
-│   └── lib/                               # types.ts, mock-data.ts, supabase/client.ts
-│
-├── frontend/                              # Frontend Supabase live — PR ini
-│   ├── README.md                          # Panduan lengkap Tahap 5
-│   ├── package.json
-│   └── src/
-│       ├── proxy.ts                       # refresh session + proteksi rute
-│       ├── app/{login,signup,auth,teacher,student}/
-│       ├── components/{ui,teacher,student}/
-│       └── lib/{actions,supabase,types}/
-│
+│   │   ├── teacher/
+│   │   │   ├── ai-generator-modal.tsx     # Gemini AI Content Builder Drawer
+│   │   │   ├── roster-manager.tsx         # Manajemen Presensi & Preset Name
+│   │   │   ├── gradebook-view.tsx         # Rekap Nilai, AI Grading, Export CSV
+│   │   │   └── reflections-tab.tsx        # Analitik Mood Tracker & Jurnal Siswa
+│   │   └── student/
+│   │       ├── quiz-runner.tsx            # Anti-Cheat Scalable Quiz Interface
+│   │       ├── assignment-view.tsx        # Pengumpulan Link (Leader Only for Group)
+│   │       └── reflection-view.tsx        # Lembar Refleksi Deep Learning
+│   ├── context/
+│   │   ├── auth-context.tsx               # Context Autentikasi Hibrida
+│   │   └── lms-context.tsx                # Context State Store & Supabase Sync
+│   └── lib/
+│       ├── types.ts                       # TypeScript Data Models
+│       ├── mock-data.ts                   # Realistic Initial Dataset
+│       └── supabase/client.ts             # Supabase Client SDK Wrapper
 ├── supabase/
 │   ├── config.toml                        # Supabase CLI Configuration
 │   ├── migrations/
@@ -161,8 +134,7 @@ lessonlen-supabase/
 │       ├── generate-grading/              # AI Assistant Grading Tugas
 │       ├── setup-teacher/                 # Promosi Role Guru via Lisensi
 │       └── README-TAHAP-4.md              # Panduan Deploy Edge Functions
-│
-├── package.json                           # Dependensi prototipe src/
+├── package.json
 ├── tailwind.config.ts
 ├── tsconfig.json
 └── README.md
@@ -170,58 +142,50 @@ lessonlen-supabase/
 
 ---
 
-## Cara Menjalankan
+## Cara Menjalankan di Lingkungan Lokal
 
-### A. Prototipe UI (`src/`, data mock)
-
+### 1. Instal dependensi
 ```bash
 npm install
-npm run dev          # http://localhost:3000
 ```
 
-Untuk menyambungkan prototipe ke Supabase:
-1. Klik **"Mode Demo Aktif" / "Konfigurasi Supabase"** di pojok kanan atas Navbar.
+### 2. Jalankan server pengembangan
+```bash
+npm run dev
+```
+Buka browser di `http://localhost:3000`.
+
+### 3. Hubungkan ke Supabase Live (Opsional)
+Aplikasi sudah berjalan dengan data mock interaktif. Untuk menyambungkan ke proyek Supabase milikmu, pilih salah satu cara:
+
+**Cara A — file env (disarankan, konsisten antar perangkat)**
+```bash
+cp .env.example .env.local   # lalu isi Project URL + anon/publishable key
+npm run dev                  # restart agar nilai env terbaca
+```
+
+**Cara B — lewat UI (tanpa file, tersimpan di browser)**
+1. Klik tombol **"Mode Demo Aktif" / "Konfigurasi Supabase"** di pojok kanan atas Navbar.
 2. Masukkan **Project URL** dan **Anon Key**.
-3. Pastikan `supabase/migrations/0001_init.sql` sudah dijalankan.
 
-### B. Aplikasi Supabase live (`frontend/`)
+Untuk kedua cara: pastikan `supabase/migrations/0001_init.sql` sudah dijalankan di
+Supabase SQL Editor, dan Edge Functions sudah di-deploy
+(`supabase/functions/README-TAHAP-4.md`).
 
+> Nilai `NEXT_PUBLIC_*` dibaca saat build. Setelah mengubah `.env.local`,
+> jalankan ulang `npm run dev` / `npm run build`.
+> Jangan pernah menaruh *secret key* di frontend — hanya untuk Supabase Secrets.
+
+### 4. Perintah lain
 ```bash
-cd frontend
-cp .env.example .env.local   # isi Project URL + anon/publishable key
-npm install
-npm run dev                  # http://localhost:3000
+npm run build      # build produksi (sekaligus type check)
+npm run start      # jalankan hasil build
+npm run typecheck  # tsc --noEmit
 ```
 
-Urutan yang disarankan:
-1. **Database** — jalankan `supabase/migrations/0001_init.sql` (atau `supabase db push`).
-2. **Edge Functions** — ikuti `supabase/functions/README-TAHAP-4.md`.
-3. **Frontend** — ikuti `frontend/README.md`.
-4. **Akun guru** — daftar, lalu aktifkan peran guru dari menu *Aktivasi Guru*
-   memakai kode lisensi sekolah (default `SCHOOL-0001`).
+### Catatan dependensi
+Frontend memakai **Next.js 16 + React 19**. Upgrade dari Next 14 dilakukan untuk
+menutup 2 kerentanan `high` (advisory `next` dan `postcss`); hasil `npm audit`
+sekarang **0 vulnerabilities**. Skrip `lint` dihapus karena `next lint` sudah
+tidak tersedia di Next.js 16.
 
-Bila `.env.local` belum diisi, `frontend/` tidak error — yang tampil adalah halaman
-panduan konfigurasi.
-
----
-
-## Keamanan
-
-- Semua tabel memakai **Row Level Security (RLS)**.
-- Kunci jawaban kuis tidak bisa dibaca siswa (via `get_quiz_payload`); penilaian
-  dihitung server-side lewat RPC `submit_quiz`.
-- API key Gemini hanya disimpan sebagai **Supabase Secret** di Edge Functions —
-  frontend hanya memakai anon/publishable key.
-- Role `teacher` hanya dapat diberikan dari server (Edge Function `setup-teacher`
-  dengan kode lisensi), bukan dari client.
-- Hasil AI selalu berupa **draf** yang harus disetujui guru sebelum tersimpan.
-- Nilai draf AI disimpan terpisah di `ai_feedback`; nilai resmi tetap di `grade`.
-
----
-
-## Tahap selanjutnya (Tahap 6)
-
-- Uji beban `submit_quiz` untuk 300+ pengguna bersamaan.
-- Audit ulang RLS + isolasi data antar kelas (pgTAP / CLI integration test).
-- Putuskan implementasi frontend yang dipakai produksi, lalu deploy ke
-  Vercel/Netlify + cron anti auto-pause Supabase Free Tier.
